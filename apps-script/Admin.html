@@ -84,6 +84,65 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   }
   function dur(sec) { sec = Math.round(sec || 0); return sec < 60 ? sec + "s" : Math.floor(sec / 60) + "m " + (sec % 60) + "s"; }
   function letter(i) { return String.fromCharCode(65 + i); }
+
+  // ---------- pictures ----------
+  // IMG: saved pictures by ID ([image:ID] tags). PENDING: pictures read from a Word file, saved when the questions are added.
+  var IMG = {}, PENDING = {}, pendingSeq = 0;
+  function rich(t, small) {
+    return esc(t).replace(/\[image:([\w-]{4,40})\]/g, function (m, id) {
+      return IMG[id] ? '<img class="qimg' + (small ? " small" : "") + '" src="' + IMG[id] + '" alt="">' : '<span class="warnline">[picture not found]</span>';
+    }).replace(/\[picture (P\d+)\]/g, function (m, k) {
+      return PENDING[k] ? '<img class="qimg' + (small ? " small" : "") + '" src="' + PENDING[k] + '" alt="">' : m;
+    });
+  }
+  /** Shrinks a picture to at most 1000 px wide and returns it as a data URL (PNG for drawings, JPEG for photos). */
+  function shrinkImage(blob) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(blob), im = new Image();
+      im.onload = function () {
+        URL.revokeObjectURL(url);
+        var scale = Math.min(1, 1000 / im.naturalWidth, 1000 / im.naturalHeight);
+        var c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(im.naturalWidth * scale)); c.height = Math.max(1, Math.round(im.naturalHeight * scale));
+        var x = c.getContext("2d");
+        x.fillStyle = "#FFFFFF"; x.fillRect(0, 0, c.width, c.height);
+        x.drawImage(im, 0, 0, c.width, c.height);
+        var d = c.toDataURL("image/png");
+        if (d.length > 350000) d = c.toDataURL("image/jpeg", 0.85);
+        if (d.length > 1200000) d = c.toDataURL("image/jpeg", 0.6);
+        resolve(d);
+      };
+      im.onerror = function () { URL.revokeObjectURL(url); reject(new Error("this picture format cannot be shown in a browser (use PNG or JPG)")); };
+      im.src = url;
+    });
+  }
+  function uploadImage(dataUrl) {
+    return call("admin_saveImage", dataUrl).then(function (r) { IMG[r.id] = dataUrl; return r.id; });
+  }
+  /** Saves the pictures of pasted questions that came from a Word file, and turns their tags into [image:ID]. */
+  function savePending(items) {
+    var keys = [];
+    items.forEach(function (q) {
+      [q.text, q.solution].concat(q.choices || []).forEach(function (t) {
+        String(t || "").replace(/\[picture (P\d+)\]/g, function (m, k) { if (PENDING[k] && keys.indexOf(k) < 0) keys.push(k); return m; });
+      });
+    });
+    var ids = {}, chain = Promise.resolve();
+    keys.forEach(function (k, n) {
+      chain = chain.then(function () { toast("Saving pictures " + (n + 1) + " of " + keys.length + "…"); return uploadImage(PENDING[k]); }).then(function (id) { ids[k] = id; });
+    });
+    return chain.then(function () {
+      var swap = function (t) { return String(t || "").replace(/\[picture (P\d+)\]/g, function (m, k) { return ids[k] ? "[image:" + ids[k] + "]" : ""; }); };
+      items.forEach(function (q) { q.text = swap(q.text); q.solution = swap(q.solution); q.choices = (q.choices || []).map(swap); });
+      return items;
+    });
+  }
+  function insertTag(ta, tag) {
+    var v = ta.value, at = document.activeElement === ta ? ta.selectionStart : v.length;
+    var before = v.slice(0, at), after = v.slice(at);
+    ta.value = before + (before && !/\n$/.test(before) ? "\n" : "") + tag + (after && !/^\n/.test(after) ? "\n" : "") + after;
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
   var TYPES = [["MC", "Multiple choice"], ["ID", "Identification"], ["PS", "Problem solving"], ["ES", "Essay"]];
   function typeName(t) { return (TYPES.filter(function (x) { return x[0] === t; })[0] || ["", "Problem solving"])[1]; }
   function typeSelect(cur, attrs) {
@@ -233,6 +292,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
 
   function editor() {
     var x = ED;
+    if (x.images) { Object.keys(x.images).forEach(function (k) { IMG[k] = x.images[k]; }); }
     var subs = subjectsList();
     var secs = sectionsOf(x.subject);
     var total = x.questions.reduce(function (s, q) { return s + (Number(q.points) || 0); }, 0);
@@ -321,7 +381,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<span style="flex:1"></span><button class="btn small ghost" data-mv="-1" data-i="' + i + '"' + (i ? "" : " disabled") + ">↑</button>" +
       '<button class="btn small ghost" data-mv="1" data-i="' + i + '"' + (i < n - 1 ? "" : " disabled") + ">↓</button>" +
       '<button class="btn small danger" data-rm="' + i + '">Delete</button></div>';
-    var body = '<label class="field">Question<textarea data-f="text" data-i="' + i + '">' + esc(q.text) + "</textarea></label>";
+    var tags = [];
+    [q.text].concat(q.choices || []).forEach(function (t) { String(t || "").replace(/\[image:[\w-]{4,40}\]/g, function (m) { tags.push(m); return m; }); });
+    var body = '<label class="field">Question<textarea data-f="text" data-i="' + i + '">' + esc(q.text) + "</textarea></label>" +
+      '<div class="btnrow" style="align-items:center;margin:4px 0 8px"><label class="btn small ghost" style="cursor:pointer">🖼 Add picture<input type="file" accept="image/*" data-pic="' + i + '" hidden></label>' +
+      '<span class="muted" style="font-size:.85rem">or paste a picture (Ctrl+V) into the question. It appears where its [image:…] tag is; move the tag onto a choice\'s line to put the picture in that choice.</span></div>' +
+      (tags.length ? '<div class="thumbs">' + tags.map(function (t) { return rich(t, true); }).join("") + "</div>" : "");
     if (q.type === "MC") {
       body += '<div class="form-grid"><label class="field wide">Choices (one per line, without A. B. C.)<textarea data-f="choices" data-i="' + i + '">' + esc((q.choices || []).join("\n")) + "</textarea></label>" +
         '<label class="field">Correct answer<select data-f="answer" data-i="' + i + '">' + (q.choices || []).map(function (c, j) {
@@ -357,10 +422,10 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var on = document.getElementById("show-pv").checked;
     box.hidden = !on;
     if (!on) return;
-    var html = esc(q.text);
-    if (q.type === "MC") html += "<ol type=\"A\">" + (q.choices || []).map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
-    else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + esc(q.solution) : "";
-    else html += "\n\n<b>Answer:</b> " + esc(q.answer) + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
+    var html = rich(q.text);
+    if (q.type === "MC") html += "<ol type=\"A\">" + (q.choices || []).map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + rich(c, true) + "</li>"; }).join("") + "</ol>";
+    else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + rich(q.solution) : "";
+    else html += "\n\n<b>Answer:</b> " + esc(q.answer) + (q.solution ? "\n<b>Solution:</b>\n" + rich(q.solution) : "");
     box.innerHTML = html;
     typeset(box);
   }
@@ -443,8 +508,27 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       var card = t.closest(".qedit");
       pvTimer = setTimeout(function () { renderPreview(card, q); }, 400);
     });
+    function addPicture(i, blob, ta) {
+      toast("Adding the picture…");
+      shrinkImage(blob).then(uploadImage).then(function (id) {
+        readForm();
+        var area = ta || view.querySelector('[data-card="' + i + '"] textarea[data-f="text"]');
+        insertTag(area, "[image:" + id + "]");
+        markDirty(); editor(); scrollToCard(i);
+        toast("Picture added.");
+      }).catch(function (e) { toast("Could not add the picture: " + e.message, true); });
+    }
+    g("qlist").addEventListener("paste", function (e) {
+      var ta = e.target;
+      if (ta.tagName !== "TEXTAREA" || !e.clipboardData) return;
+      var file = [].filter.call(e.clipboardData.items || [], function (it) { return it.kind === "file" && /^image\//.test(it.type); })[0];
+      if (!file) return;
+      e.preventDefault();
+      addPicture(Number(ta.dataset.i), file.getAsFile(), ta);
+    });
     g("qlist").addEventListener("change", function (e) {
       var t = e.target, i = Number(t.dataset.i), q = ED.questions[i];
+      if (t.dataset.pic !== undefined) { var f = t.files[0]; t.value = ""; if (f) addPicture(Number(t.dataset.pic), f); return; }
       if (!q) return;
       if (t.dataset.f === "type") {
         readForm();
@@ -504,27 +588,37 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         (ED.questions.length ? '<button class="btn ghost" id="p-replace">Replace all ' + ED.questions.length + " current questions</button>" : "") +
         '<button class="btn ghost" id="p-clear">Discard</button>' +
         '<label class="check" style="margin-left:auto">Set all to ' + typeSelect("", 'id="p-all"').replace("<select id=\"p-all\">", '<select id="p-all"><option value="">…</option>') + "</label></div>" +
-        '<p class="muted" style="margin:0 0 8px">Wrong type? Change it on each question below (or all at once above). You can also change it later in the question list.</p>' : "") +
+        '<p class="muted" style="margin:0 0 8px">Check each question below: change its type (or all at once above), choose or type its answer, and set its points. You can also change all of this later in the question list.</p>' : "") +
       '<div id="p-list">' + p.items.map(function (q, i) {
         var w = qWarnings(q);
-        var html = esc(q.text);
-        if (q.type === "MC") html += '<ol type="A">' + q.choices.map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
-        else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + esc(q.solution) : "";
-        else html += "\n\n<b>Answer:</b> " + esc(q.answer || "—") + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
+        var html = rich(q.text);
+        if (q.type === "MC") html += '<ol type="A">' + q.choices.map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + rich(c, true) + "</li>"; }).join("") + "</ol>";
+        var ans;
+        if (q.type === "MC") ans = '<label class="check">Correct answer <select data-pans="' + i + '"><option value="">—</option>' +
+          q.choices.map(function (c, j) { return "<option" + (letter(j) === q.answer ? " selected" : "") + ">" + letter(j) + "</option>"; }).join("") + "</select></label>";
+        else if (q.type === "ID") ans = '<label class="field">Accepted answers <input type="text" data-pans="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. mitochondria | mitochondrion"></label>';
+        else if (q.type === "PS") ans = '<div class="form-grid"><label class="field">Answer <input type="text" data-pans="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. 20.4 or 3/8 or x^2 + C"></label>' +
+          '<label class="field">Tolerance % <input type="number" min="0" step="any" data-ptol="' + i + '" value="' + esc(q.tol) + '"></label></div>' +
+          '<label class="field">Solution <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
+        else ans = '<label class="field">Guide or model answer (optional) <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
+        html = '<div class="rendered">' + html + '</div><div class="p-answer">' + ans + "</div>";
         return '<div class="qedit' + (w.length ? " warn" : "") + '" data-pcard="' + i + '"><div class="qe-head"><b>#' + (i + 1) + "</b>" +
           '<label class="check">Type ' + typeSelect(q.type, 'data-ptype="' + i + '"') + "</label>" +
           '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-ppts="' + i + '" value="' + esc(q.points) + '"></label>' +
-          (q.type === "PS" ? '<span class="muted">tolerance ' + q.tol + "%</span>" : "") + "</div>" +
-          '<div class="rendered">' + html + "</div>" + (w.length ? '<div class="warnline">⚠️ ' + w.map(esc).join(" · ") + "</div>" : "") + "</div>";
+          "</div>" + html + '<div class="warnline"' + (w.length ? "" : " hidden") + ">⚠️ " + w.map(esc).join(" · ") + "</div></div>";
       }).join("") + "</div>";
     typeset(box);
     var add = function (replace) {
       readForm();
-      var items = p.items.map(function (q) { return { type: q.type, text: q.text, choices: q.choices, answer: q.answer, points: q.points, tol: q.type === "PS" ? q.tol : "", solution: q.solution }; });
-      ED.questions = replace ? items : ED.questions.concat(items);
-      parsed = null; markDirty(); editor();
-      toast(items.length + " questions added. Review them, then click Save exam.");
-      setTimeout(function () { var l = document.getElementById("qlist"); if (l) l.scrollIntoView({ behavior: "smooth" }); }, 50);
+      var items = p.items.map(function (q) { return { type: q.type, text: q.text, choices: q.choices.slice(), answer: q.answer, points: q.points, tol: q.type === "PS" ? q.tol : "", solution: q.solution }; });
+      var btns = box.querySelectorAll("#p-add, #p-replace");
+      btns.forEach(function (b) { b.disabled = true; });
+      savePending(items).then(function () {
+        ED.questions = replace ? items : ED.questions.concat(items);
+        parsed = null; markDirty(); editor();
+        toast(items.length + " questions added. Review them, then click Save exam.");
+        setTimeout(function () { var l = document.getElementById("qlist"); if (l) l.scrollIntoView({ behavior: "smooth" }); }, 50);
+      }).catch(function (e) { btns.forEach(function (b) { b.disabled = false; }); toast("Could not save the pictures: " + e.message, true); });
     };
     if (document.getElementById("p-add")) document.getElementById("p-add").onclick = function () { add(false); };
     if (document.getElementById("p-replace")) document.getElementById("p-replace").onclick = function () { if (confirm("Replace all current questions with the pasted ones?")) add(true); };
@@ -546,6 +640,24 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         if (again) window.scrollBy(0, again.getBoundingClientRect().top - y);   // keep the question where it was on screen
       };
     });
+    var refreshWarn = function (i) {
+      var card = box.querySelector('[data-pcard="' + i + '"]'), w = qWarnings(p.items[i]), line = card.querySelector(".warnline");
+      card.classList.toggle("warn", !!w.length);
+      line.hidden = !w.length;
+      line.textContent = "⚠️ " + w.join(" · ");
+    };
+    box.querySelectorAll("[data-pans]").forEach(function (el) {
+      el.oninput = function () { p.items[Number(el.dataset.pans)].answer = el.value; refreshWarn(Number(el.dataset.pans)); };
+      if (el.tagName === "SELECT") el.onchange = function () {
+        p.items[Number(el.dataset.pans)].answer = el.value;
+        var y = el.getBoundingClientRect().top, i = el.dataset.pans;
+        showParsed();
+        var again = box.querySelector('[data-pans="' + i + '"]');
+        if (again) window.scrollBy(0, again.getBoundingClientRect().top - y);
+      };
+    });
+    box.querySelectorAll("[data-ptol]").forEach(function (el) { el.oninput = function () { p.items[Number(el.dataset.ptol)].tol = el.value === "" ? 0 : Number(el.value); }; });
+    box.querySelectorAll("[data-psol]").forEach(function (el) { el.oninput = function () { p.items[Number(el.dataset.psol)].solution = el.value; }; });
     box.querySelectorAll("[data-ppts]").forEach(function (inp) {
       inp.oninput = function () { p.items[Number(inp.dataset.ppts)].points = inp.value === "" ? 0 : Number(inp.value); };
     });
@@ -572,21 +684,43 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       files[dec.decode(u8.subarray(off + 46, off + 46 + nlen))] = { method: dv.getUint16(off + 10, true), size: dv.getUint32(off + 20, true), at: dv.getUint32(off + 42, true) };
       off += 46 + nlen + dv.getUint16(off + 30, true) + dv.getUint16(off + 32, true);
     }
-    return function read(name) {
+    return function read(name, binary) {
       var f = files[name];
       if (!f) return Promise.resolve(null);
       var start = f.at + 30 + dv.getUint16(f.at + 26, true) + dv.getUint16(f.at + 28, true);
       var data = u8.subarray(start, start + f.size);
-      if (f.method === 0) return Promise.resolve(dec.decode(data));
+      if (f.method === 0) return Promise.resolve(binary ? data.slice() : dec.decode(data));
       if (f.method !== 8 || typeof DecompressionStream === "undefined") return Promise.reject(new Error("this browser cannot open .docx files; use the latest Chrome or Edge"));
-      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer().then(function (b) { return dec.decode(b); });
+      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer()
+        .then(function (b) { return binary ? new Uint8Array(b) : dec.decode(b); });
     };
   }
   function docxToText(buf) {
     var read = unzip(buf);
-    return Promise.all(["word/document.xml", "word/numbering.xml", "word/styles.xml"].map(read)).then(function (x) {
+    return Promise.all(["word/document.xml", "word/numbering.xml", "word/styles.xml", "word/_rels/document.xml.rels"].map(function (n) { return read(n); })).then(function (x) {
       if (!x[0]) throw new Error("this is not a Word .docx file");
-      return docxLines(x[0], x[1], x[2]);
+      var res = docxLines(x[0], x[1], x[2]);
+      if (!res.pics.length) return res;
+      // pictures: find each one's file in word/media through the relationships file, then shrink it
+      var rels = {};
+      if (x[3]) [].forEach.call(new DOMParser().parseFromString(x[3], "application/xml").getElementsByTagName("Relationship"), function (r) {
+        rels[r.getAttribute("Id")] = "word/" + String(r.getAttribute("Target") || "").replace(/^\/?word\//, "").replace(/^\.\//, "");
+      });
+      var MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
+      var skipped = 0, done = 0;
+      return Promise.all(res.pics.map(function (pic) {
+        var path = rels[pic.rid], ext = String(path || "").split(".").pop().toLowerCase();
+        if (!path || !MIME[ext]) { skipped++; res.text = res.text.replace("[picture " + pic.key + "]", ""); return null; }
+        return read(path, true).then(function (bytes) {
+          if (!bytes) throw new Error("missing");
+          return shrinkImage(new Blob([bytes], { type: MIME[ext] }));
+        }).then(function (d) { PENDING[pic.key] = d; done++; })
+          .catch(function () { skipped++; res.text = res.text.replace("[picture " + pic.key + "]", ""); });
+      })).then(function () {
+        if (done) res.notes.unshift(done + " picture(s) from the file were placed in their questions. They are saved when you add the questions.");
+        if (skipped) res.notes.push(skipped + " picture(s) could not be imported (for example drawings made in Word, or EMF/WMF images). Add them with \"Add picture\" after adding the questions.");
+        return res;
+      });
     });
   }
   function docxLines(docXml, numXml, styleXml) {
@@ -622,7 +756,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       }
       return String(n);
     }
-    var counters = {}, seenNum = {}, pictures = 0, equations = 0;
+    var counters = {}, seenNum = {}, pictures = 0, equations = 0, pics = [];
+    var A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main", R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     function listPrefix(p) {
       var ppr = kid(p, "pPr"), np = kid(ppr, "numPr"), id, lvl;
       if (np) { id = val(kid(np, "numId")); lvl = val(kid(np, "ilvl")) || "0"; }
@@ -646,7 +781,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         else if (name === "t") out += c.textContent;
         else if (name === "tab") out += " ";
         else if (name === "br" || name === "cr") out += "\n";
-        else if (name === "drawing" || name === "pict" || name === "object") pictures++;
+        else if (name === "drawing" || name === "pict" || name === "object") {
+          var blip = c.getElementsByTagNameNS(A_NS, "blip")[0], vml = c.getElementsByTagName("v:imagedata")[0];
+          var rid = blip ? blip.getAttributeNS(R_NS, "embed") || blip.getAttribute("r:embed") : vml ? vml.getAttributeNS(R_NS, "id") || vml.getAttribute("r:id") : "";
+          if (rid) { var key = "P" + (++pendingSeq); pics.push({ key: key, rid: rid }); out += "[picture " + key + "]"; }
+          else pictures++;
+        }
         else if (name === "p") return;                        // a paragraph inside a text box is read on its own
         else if (name === "delText" || name === "instrText" || name === "pPr" || name === "rPr") return;
         else out += text(c);
@@ -656,9 +796,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var doc = parse(docXml);
     var lines = [].map.call(doc.getElementsByTagNameNS(W, "p"), function (p) { return listPrefix(p) + text(p); });
     var notes = [];
-    if (pictures) notes.push(pictures + " picture(s) in the file were not imported. Add figures to those questions as text, or describe them.");
+    if (pictures) notes.push(pictures + " drawing(s) or object(s) in the file could not be imported. Add them as pictures after adding the questions.");
     if (equations) notes.push(equations + " Word equation(s) were turned into math. Check them in the preview (tick \"Show how students will see the math\" after adding).");
-    return { text: lines.join("\n").replace(/\n{3,}/g, "\n\n"), notes: notes };
+    return { text: lines.join("\n").replace(/\n{3,}/g, "\n\n"), notes: notes, pics: pics };
   }
   // Word equation (OMML) -> LaTeX
   function omml(n) {
@@ -1061,6 +1201,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       if (tab !== "results" || id !== resExam) return;
       var editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#r-body input");
       resData = d;
+      Object.keys(d.exam.images || {}).forEach(function (k) { IMG[k] = d.exam.images[k]; });
       if (!editing) drawResults();
       var auto = document.getElementById("r-auto");
       if (auto && auto.checked) resTimer = setTimeout(loadResults, 20000);
@@ -1151,14 +1292,14 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       var given = a.manual && a.manual[q.id] !== undefined ? a.manual[q.id] : "";
       html += '<div class="qedit" style="border-color:' + border + '"><div class="qe-head"><b>Q' + (i + 1) + "</b><span class=\"pill\">" + typeName(q.type) + "</span><span>" + mark + "</span>" +
         '<span style="flex:1"></span><label class="check" title="Leave blank to use the automatic score">Points <input class="score" data-item="' + esc(q.id) + '" data-max="' + q.points + '" value="' + esc(given) + '" placeholder="' +
-        (q.type === "ES" ? "—" : esc(it.got || 0)) + '"> / ' + q.points + "</label></div>" + '<div class="rendered">' + esc(q.text) + "</div>";
+        (q.type === "ES" ? "—" : esc(it.got || 0)) + '"> / ' + q.points + "</label></div>" + '<div class="rendered">' + rich(q.text) + "</div>";
       if (q.type === "ID") {
         html += "<p>Answer: <b>" + esc(mine || "(blank)") + "</b> · Accepted: <b>" + esc(String(q.answer).split("|").map(function (k) { return k.trim(); }).join(", ")) + "</b></p>";
       } else if (q.type === "ES") {
         html += (mine ? '<div class="muted">Student\'s answer (' + (String(mine).trim().match(/\S+/g) || []).length + ' words):</div><div class="sol-view">' + esc(mine) + "</div>" : '<p class="muted">No answer written.</p>') +
           (q.solution ? '<details><summary class="muted">Your guide</summary><div class="sol-view">' + esc(q.solution) + "</div></details>" : "");
       } else if (q.type === "MC") {
-        html += "<p>Answer: <b>" + esc(mine || "(blank)") + (mine ? ". " + esc(q.choices[mine.charCodeAt(0) - 65] || "") : "") + "</b> · Key: <b>" + esc(q.answer) + ". " + esc(q.choices[q.answer.charCodeAt(0) - 65] || "") + "</b></p>";
+        html += "<p>Answer: <b>" + esc(mine || "(blank)") + (mine ? ". " + rich(q.choices[mine.charCodeAt(0) - 65] || "", true) : "") + "</b> · Key: <b>" + esc(q.answer) + ". " + rich(q.choices[q.answer.charCodeAt(0) - 65] || "", true) + "</b></p>";
       } else {
         html += "<p>Final answer: <b>" + esc(mine && mine.a || "(blank)") + "</b> · Key: <b>" + esc(String(q.answer).split("|").join(" or ")) + "</b></p>" +
           (mine && mine.s ? '<div class="muted">Student\'s solution:</div><div class="sol-view">' + esc(mine.s) + "</div>" : '<p class="muted">No solution written.</p>');

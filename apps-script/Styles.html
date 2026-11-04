@@ -465,6 +465,8 @@ h2.group { color: var(--plum); font-size: 1.2rem; margin: 6px 0 12px; }
 .review-sol { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: var(--plum-pale); border: 1px solid var(--plum-line); white-space: pre-wrap; }
 .mine { margin-top: 8px; padding: 10px 14px; border-radius: 10px; background: #FFFFFF; border: 1px dashed var(--plum-line); white-space: pre-wrap; }
 .choices label.key { border-color: var(--ok-bd); background: var(--ok-bg); }
+img.qimg { display: block; max-width: 100%; max-height: 460px; margin: 10px 0; border-radius: 8px; border: 1px solid var(--line); background: #FFFFFF; }
+img.qimg.small { display: inline-block; max-height: 180px; margin: 4px 0; vertical-align: middle; }
 .choices label.wrongpick { border-color: var(--no-bd); background: var(--no-bg); }
 
 /* Admin: exam editor and paste box */
@@ -483,6 +485,11 @@ h2.group { color: var(--plum); font-size: 1.2rem; margin: 6px 0 12px; }
 label.check input[type=number], label.check input.score { width: 80px; height: auto; padding: 5px 8px; font-size: .95rem; }
 label.check select { width: auto; padding: 5px 8px; font-size: .95rem; }
 label.check { white-space: nowrap; }
+.thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+.thumbs img.qimg { max-height: 110px; margin: 0; }
+.p-answer { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #FFFFFF; border: 1px dashed var(--plum-line); }
+.p-answer .field { margin: 4px 0; }
+.p-answer input[type=text] { max-width: 520px; }
 .sticky-save { position: sticky; bottom: 0; z-index: 40; background: rgba(252, 246, 247, .96); border-top: 1px solid var(--line); padding: 10px 0; margin-top: 16px; }
 .ev-list { margin: 0; padding-left: 18px; font-size: .85rem; }
 .ev-list .bad { color: var(--no); font-weight: 700; }

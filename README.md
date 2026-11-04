@@ -50,6 +50,18 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
   `Type: essay` line under a question. Without one, it is guessed: choices → multiple choice; a numeric or formula
   answer or a solution → problem solving; a word answer → identification; no answer → essay. Check the preview.
 - Points written in a question, like `(5 points)` or `[2 pts]`, are used for that question.
+- After **Read questions**, check every question in the preview: change its **type**, choose the **correct answer**
+  (multiple choice) or type the **accepted answers**, answer, tolerance and solution, and set its **points**. All of
+  this can also be changed later in the question list.
+
+### Pictures
+- In the question list, click **🖼 Add picture** on a question, or paste a copied picture (Ctrl+V) into the question
+  box. The picture appears where its `[image:…]` tag is; move the tag onto a choice's line to show the picture in that
+  choice.
+- Pictures in a Word file are imported with the questions, in the right place. (Drawings made with Word's shapes and
+  EMF/WMF images cannot be; add those as pictures.) Pictures in a PDF are not imported.
+- Pictures are shrunk to at most 1000 pixels and kept in the **Images** tab of the Google Sheet, so nothing needs to be
+  shared on Google Drive.
 - Also understood: choices on one line (`A. 2x  B. x²  C. 2`), the correct choice marked with `*`, an **Answer key**
   section at the end (`1. B  2. C  3. A`), a **Solutions** section at the end, and `Part I` / `Part II` headings where
   numbering starts again. Several accepted answers: `Answer: 0.5 | 1/2`.

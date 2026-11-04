@@ -21,7 +21,12 @@ var CONFIG = {
   LOGO: 'https://raw.githubusercontent.com/mrvitalez/Online-Exam/main/img/rtu-logo.jpg'
 };
 
-var TABS = { SETTINGS: 'Settings', EXAMS: 'Exams', QUESTIONS: 'Questions', CLASS: 'Class List', ATTEMPTS: 'Attempts' };
+var TABS = { SETTINGS: 'Settings', EXAMS: 'Exams', QUESTIONS: 'Questions', CLASS: 'Class List', ATTEMPTS: 'Attempts', IMAGES: 'Images' };
+// Pictures are stored in the Images tab as text (data URLs), split over rows because a cell holds at most 50,000
+// characters. Questions show them with a tag such as [image:IMG1A2B3C4D] in the question or a choice.
+var IMG_HEAD = ['Image ID', 'Part', 'Data'];
+var IMG_PART = 45000;
+var IMG_MAX = 1500000;   // characters of one picture (about 1.1 MB); the admin site shrinks pictures well below this
 var EXAM_HEAD = ['Exam ID', 'Subject', 'Title', 'Status', 'Opens', 'Closes', 'Time Limit (min)', 'Block Sections',
                  'Auto-submit After Leaving', 'Shuffle Questions', 'Shuffle Choices', 'Block Copy/Paste',
                  'Show Score After Submitting', 'Show Solutions', 'Instructions', 'Updated'];
@@ -266,6 +271,7 @@ function api_review(examId) {
   var g = grade_(exam, answers, parseJson_(r[AC.MANUAL - 1], {}));
   return {
     title: exam.title, subject: exam.subject, score: g.score, total: g.total, pending: g.pending,
+    images: images_(imageIdsIn_(exam.questions, true)),
     final: r[AC.FINAL - 1] === '' ? '' : r[AC.FINAL - 1], remarks: r[AC.REMARKS - 1],
     questions: exam.questions.map(function (q, i) {
       return { n: i + 1, type: q.type, text: q.text, points: q.points, choices: q.choices, answer: q.answer,
@@ -531,6 +537,7 @@ function publicExam_(exam, live) {
   exam.questions.forEach(function (q) { if (order.indexOf(q.id) < 0) order.push(q.id); });
   return {
     id: exam.id, title: exam.title, subject: exam.subject, instructions: exam.instructions,
+    images: images_(imageIdsIn_(exam.questions, false)),
     maxLeave: exam.maxLeave, blockCopy: exam.blockCopy,
     questions: order.map(function (id) {
       var q = byId[id];
@@ -696,6 +703,7 @@ function admin_getExam(id) {
     });
   }
   x.counts = c;
+  x.images = images_(imageIdsIn_(x.questions, true));
   return x;
 }
 
@@ -823,6 +831,7 @@ function admin_results(examId) {
     out.push({ email: email, no: a.no, name: a.name, section: a.section, extra: true, attempt: a });
   });
   out.sort(function (a, b) { return cmp_(a.section, b.section) || cmp_(a.name, b.name); });
+  exam.images = images_(imageIdsIn_(exam.questions, true));
   exam.opensText = dtLocal_(exam.opens);
   exam.closesText = dtLocal_(exam.closes);
   return { exam: exam, rows: out, now: Date.now() };
@@ -1060,6 +1069,56 @@ function classRow_(r) {
   return [no, r[1], r[2], r[3], String(r[4]).trim() || numberEmail_(no), truthy_(r[5])];
 }
 
+// ---------------------------------------------------------------------------
+// Pictures
+// ---------------------------------------------------------------------------
+
+/** Saves one picture (a data URL made by the admin site) and returns its ID for an [image:ID] tag. */
+function admin_saveImage(dataUrl) {
+  requireAdmin_();
+  var d = String(dataUrl || '');
+  if (!/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(d)) throw new Error('That file is not a picture the exam can show (use PNG, JPG, GIF or WebP).');
+  if (d.length > IMG_MAX) throw new Error('That picture is too large. Use a smaller picture (under about 1 MB).');
+  var id = newId_('IMG');
+  var rows = [];
+  for (var i = 0; i * IMG_PART < d.length; i++) rows.push([id, i + 1, d.slice(i * IMG_PART, (i + 1) * IMG_PART)]);
+  var sh = ss_().getSheetByName(TABS.IMAGES) || sheetFor_(TABS.IMAGES, IMG_HEAD);
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { sh.getRange(sh.getLastRow() + 1, 1, rows.length, 3).setValues(rows); }
+  finally { lock.releaseLock(); }
+  cachePut_('img:' + id, d);
+  return { id: id };
+}
+
+/** The [image:ID] tags used in questions (and choices; solutions too when withSolutions). */
+function imageIdsIn_(questions, withSolutions) {
+  var ids = {};
+  var scan = function (t) { String(t || '').replace(/\[image:([\w-]{4,40})\]/g, function (m, id) { ids[id] = 1; return m; }); };
+  questions.forEach(function (q) { scan(q.text); (q.choices || []).forEach(scan); if (withSolutions) scan(q.solution); });
+  return Object.keys(ids);
+}
+
+/** {ID: data URL} for the given picture IDs. */
+function images_(ids) {
+  var out = {}, missing = [];
+  ids.forEach(function (id) { var hit = cacheGet_('img:' + id); if (hit) out[id] = hit; else missing.push(id); });
+  if (!missing.length) return out;
+  var sh = ss_().getSheetByName(TABS.IMAGES);
+  if (!sh || sh.getLastRow() < 2) return out;
+  var want = {};
+  missing.forEach(function (id) { want[id] = []; });
+  sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r) {
+    if (want[r[0]]) want[r[0]].push([Number(r[1]), String(r[2])]);
+  });
+  missing.forEach(function (id) {
+    if (!want[id].length) return;
+    out[id] = want[id].sort(function (a, b) { return a[0] - b[0]; }).map(function (p) { return p[1]; }).join('');
+    cachePut_('img:' + id, out[id]);
+  });
+  return out;
+}
+
 function openBook_(url) {
   var m = String(url || '').match(/\/d\/([\w-]{20,})/);
   if (!m) throw new Error('Paste the address of your record book (a Google Sheets link).');
@@ -1121,6 +1180,7 @@ function setup() {
   sheetFor_(TABS.QUESTIONS, Q_HEAD);
   sheetFor_(TABS.CLASS, CLASS_HEAD);
   sheetFor_(TABS.ATTEMPTS, ATT_HEAD);
+  sheetFor_(TABS.IMAGES, IMG_HEAD);
   sheet_(TABS.EXAMS).getRange('E:F').setNumberFormat('yyyy-mm-dd hh:mm');
   sheet_(TABS.ATTEMPTS).getRange('J:L').setNumberFormat('yyyy-mm-dd hh:mm:ss');
   sheet_(TABS.CLASS).getRange('A:A').setNumberFormat('@');

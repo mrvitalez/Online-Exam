@@ -183,6 +183,8 @@ Answer key
   check(/picture/.test(docxRes) && /equation/.test(docxRes), 'word file: notes about pictures and equations');
   const pasteBox = await ad.inputValue('#paste');
   check(pasteBox.includes('2. Simplify $\\frac{x^{2}}{x}$.') && pasteBox.includes('B. Mercury') && pasteBox.includes('1. A car travels'), 'word file: equation converted to LaTeX, list numbers rebuilt', JSON.stringify(pasteBox.slice(0, 260)));
+  check(/\[picture P\d+\]/.test(pasteBox) && await ad.$('[data-pcard="1"] .rendered img.qimg') !== null, 'word file: picture placed in its question and shown in the preview');
+  check(/1 picture\(s\) from the file were placed/.test(await ad.textContent('#parsed')) && /could not be imported/.test(await ad.textContent('#parsed')), 'word file: notes say which pictures were imported or not');
   await ad.screenshot({ path: out + '/a-docx.png', fullPage: true });
   // change types in the preview
   await ad.selectOption('[data-ptype="0"]', 'ID'); await ad.waitForTimeout(150);
@@ -194,12 +196,23 @@ Answer key
   await ad.selectOption('[data-ptype="2"]', 'ES'); await ad.waitForTimeout(150);
   check(await ad.inputValue('[data-ppts="2"]') === '10', 'preview: points follow the new type when the file did not set them', await ad.inputValue('[data-ppts="2"]'));
   await ad.fill('[data-ppts="1"]', '4');
+  // answers in the preview
+  await ad.selectOption('[data-ptype="0"]', 'ID'); await ad.waitForTimeout(100);
+  check(/No answer/.test(await ad.textContent('[data-pcard="0"]')), 'preview: identification without an answer is flagged');
+  await ad.fill('[data-pans="0"]', 'Mercury | planet Mercury');
+  check(!(await ad.isVisible('[data-pcard="0"] .warnline')), 'preview: typing the answer clears the warning');
   await ad.selectOption('#p-all', 'ID'); await ad.waitForTimeout(150);
   check(/Found 3 questions: 3 identification/.test(await ad.textContent('#parsed')), 'preview: "Set all to" changes every question');
   await ad.selectOption('[data-ptype="1"]', 'MC'); await ad.selectOption('[data-ptype="2"]', 'PS'); await ad.waitForTimeout(150);
   await ad.click('#p-add'); await ad.waitForTimeout(200);
   const types = await ad.$$eval('#qlist select[data-f="type"]', (s) => s.map((x) => x.value));
   check(types.join(',') === 'ID,MC,PS' && await ad.inputValue('#qlist [data-card="1"] input[data-f="points"]') === '4', 'preview: chosen types and points are added to the exam', types.join(','));
+  check(await ad.inputValue('#qlist [data-card="0"] input[data-f="answer"]') === 'Mercury | planet Mercury', 'preview: answer typed in the preview is added');
+  const q2text = await ad.inputValue('#qlist [data-card="1"] textarea[data-f="text"]');
+  check(/\[image:IMG\w+\]/.test(q2text) && H.ss.getSheetByName('Images').data.length === 2 && await ad.$('#qlist [data-card="1"] .thumbs img') !== null,
+    'word file: picture saved to the Images tab when the questions were added', q2text);
+  await ad.setInputFiles('#qlist [data-pic="2"]', require('path').join(__dirname, 'fixture.png')); await ad.waitForTimeout(600);
+  check(/\[image:IMG\w+\]/.test(await ad.inputValue('#qlist [data-card="2"] textarea[data-f="text"]')) && await ad.$('#qlist [data-card="2"] .thumbs img') !== null, 'editor: "Add picture" adds a picture to a question');
   await ad.selectOption('#qlist [data-card="0"] select[data-f="type"]', 'MC'); await ad.waitForTimeout(150);
   check(await ad.inputValue('#qlist [data-card="0"] textarea[data-f="choices"]') === 'Venus\nMercury\nEarth\nMars', 'editor: changing to multiple choice turns lettered lines into choices');
   if (havePdfJs) {
@@ -316,14 +329,17 @@ Answer key
   check(reset, 'retake: attempt marked as reset');
 
   // ---------- identification and essay: take, check, score ----------
+  const png = 'data:image/png;base64,' + require('fs').readFileSync(require('path').join(__dirname, 'fixture.png')).toString('base64');
+  const picId = H.as(H.ADMIN, () => H.ctx.admin_saveImage(png)).id;
   const quiz = H.as(H.ADMIN, () => H.ctx.admin_saveExam({ subject: 'MMW', title: 'Quiz 2', status: 'Published', limit: 20, maxLeave: 0, showScore: true,
     showSolutions: 'After submitting', questions: [
-      { type: 'ID', text: 'Powerhouse of the cell', answer: 'Mitochondria | mitochondrion', points: 2 },
+      { type: 'ID', text: 'Powerhouse of the cell\n[image:' + picId + ']', answer: 'Mitochondria | mitochondrion', points: 2 },
       { type: 'ID', text: 'Pythagorean ___', answer: 'theorem', points: 1 },
       { type: 'ES', text: 'Explain why the sky is blue.', points: 10, solution: 'Rayleigh scattering of shorter wavelengths.' }] }));
   const s5 = await open(juan);
   await s5.click(`[data-start="${quiz.id}"]`); await s5.click('#ov-ok'); await s5.waitForTimeout(500);
   const qq = await s5.$$eval('.q-card', (els) => els.map((e) => e.dataset.q));
+  check(await s5.$eval('.q-card img.qimg', (i) => i.src.startsWith('data:image/png') && i.naturalWidth === 60), 'student: picture shown in the question');
   await s5.fill(`[data-idans="${qq[0]}"]`, '  MITOCHONDRIA. ');
   await s5.fill(`[data-idans="${qq[1]}"]`, 'theory');
   await s5.fill(`[data-essay="${qq[2]}"]`, 'Air molecules scatter blue light more than red light, so we see blue from every direction.');
@@ -349,6 +365,7 @@ Answer key
   const s6 = await open(juan);
   await s6.click(`[data-review="${quiz.id}"]`); await s6.waitForTimeout(500);
   const rv5 = (await s6.textContent('#view')).replace(/\s+/g, ' ');
+  check(await s6.$('.q-card img.qimg') !== null, 'review: picture shown');
   check(/Rayleigh scattering/.test(rv5) && /Accepted answers: Mitochondria, mitochondrion/.test(rv5) && /8 \/ 10/.test(rv5), 'review: identification, essay points and guide shown', rv5.slice(0, 300));
   await s6.screenshot({ path: out + '/s-review2.png', fullPage: true });
 
