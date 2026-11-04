@@ -276,7 +276,8 @@ function api_review(examId) {
     questions: exam.questions.map(function (q, i) {
       return { n: i + 1, type: q.type, text: q.text, points: q.points, choices: q.choices, answer: q.answer,
                solution: q.solution, mine: answers[q.id] === undefined ? null : answers[q.id], ok: g.items[i].ok, got: g.items[i].got,
-               pending: g.items[i].pending };
+               pending: g.items[i].pending, parts: q.parts ? q.parts.map(function (pt, j) {
+                 return { l: pt.l, t: pt.t, a: pt.a, p: pt.p, ok: g.items[i].parts[j].ok, got: g.items[i].parts[j].got }; }) : null };
     })
   };
 }
@@ -421,20 +422,30 @@ function grade_(exam, answers, manual) {
   manual = manual || {};
   var score = 0, total = 0, pending = 0;
   var items = exam.questions.map(function (q) {
-    var a = answers[q.id], ok;
+    var a = answers[q.id], ok, parts = null, partGot = 0;
     if (q.type === 'MC') ok = typeof a === 'string' && a.toUpperCase() === String(q.answer).toUpperCase();
+    else if (q.type === 'PS' && q.parts && q.parts.length) {
+      // sub-questions: each part is checked on its own and earns its own points
+      var mine = a && typeof a === 'object' && a.p && typeof a.p === 'object' ? a.p : {};
+      parts = q.parts.map(function (pt) {
+        var good = psCorrect_(mine[pt.l], { answer: pt.a, tol: pt.tol });
+        if (good) partGot += pt.p;
+        return { l: pt.l, ok: good, got: good ? pt.p : 0 };
+      });
+      ok = parts.every(function (x) { return x.ok; });
+    }
     else if (q.type === 'PS') ok = psCorrect_(a && typeof a === 'object' ? a.a : '', q);
     else if (q.type === 'ID') ok = idCorrect_(typeof a === 'string' ? a : '', q);
     else ok = null;
     var given = manual[q.id];
     var has = given !== undefined && given !== null && given !== '' && isFinite(Number(given));
-    var got = has ? Math.max(0, Math.min(q.points, Number(given))) : ok ? q.points : 0;
+    var got = has ? Math.max(0, Math.min(q.points, Number(given))) : parts ? partGot : ok ? q.points : 0;
     var isPending = q.type === 'ES' && !has && typeof a === 'string' && a.trim() !== '';
     if (isPending) pending++;
     total += q.points;
     score += got;
     return { id: q.id, ok: q.type === 'ES' ? (has ? got >= q.points : null) : (has ? got >= q.points : ok), got: round_(got),
-             auto: ok, manual: has, pending: isPending };
+             auto: ok, manual: has, pending: isPending, parts: parts };
   });
   return { score: round_(score), total: round_(total), items: items, pending: pending };
 }
@@ -459,11 +470,13 @@ function psCorrect_(text, q) {
 }
 
 function matchOne_(text, key, tol) {
+  var rawText = text, rawKey = key;
+  text = latexClean_(text);
+  key = latexClean_(key);
   if (!key) return false;
-  var k = numberAnswer_(key);
+  var k = numberOf_(key);
   if (isFinite(k)) {
-    var s = numberAnswer_(text);
-    if (!isFinite(s)) s = numberAnswer_(stripUnits_(text));
+    var s = numberOf_(text);
     if (!isFinite(s)) return false;
     var allowed = Math.max(Math.abs(k) * (Number(tol) || 0) / 100, 1e-9 * Math.max(1, Math.abs(k)));
     return Math.abs(s - k) <= allowed;
@@ -476,7 +489,34 @@ function matchOne_(text, key, tol) {
       return MathExpr.sameFunction(text, key, spec);
     } catch (e) { /* not a formula the reader understands: compare as text */ }
   }
-  return normText_(text) === normText_(key);
+  return normId_(latexText_(rawText)) === normId_(latexText_(rawKey));
+}
+
+/**
+ * Tidies an answer typed with LaTeX so it can be read as a number or formula: removes $…$, spacing commands and
+ * units written as \text{…}; \dfrac → \frac; \times and \cdot → ×.
+ */
+function latexClean_(s) {
+  return String(s == null ? '' : s).trim().replace(/^\$+|\$+$/g, '').replace(/\\[dt]frac/g, '\\frac')
+    .replace(/\\(text|mathrm|mbox)\{[^{}]*\}/g, ' ').replace(/\\[,;:! ]|~/g, ' ').replace(/\\(times|cdot)/g, '×')
+    .replace(/\^\{?\\circ\}?|°/g, ' ').replace(/\\%/g, '%').replace(/\s+/g, ' ').trim();
+}
+
+/** The words of a text answer typed with LaTeX: \text{north} → north. */
+function latexText_(s) {
+  return String(s == null ? '' : s).replace(/\\(text|mathrm|mbox)\{([^{}]*)\}/g, '$2').replace(/\$/g, '');
+}
+
+/** A number from an answer, ignoring units after it: "20.4 m/s", "\frac{3}{8} m", "3.2 × 10^{5} N". */
+function numberOf_(t) {
+  var v = numberAnswer_(t);
+  if (isFinite(v)) return v;
+  var words = String(t).split(' ');
+  for (var n = words.length - 1; n >= 1; n--) {     // drop unit words from the end: "\frac{3}{8} m/s", "3.2×10^{5} N"
+    v = numberAnswer_(words.slice(0, n).join(' '));
+    if (isFinite(v)) return v;
+  }
+  return numberAnswer_(stripUnits_(t));             // a unit stuck to the number: "20.4m/s"
 }
 
 /** "20.4 m/s" -> "20.4"; "3.2 x 10^5 N" -> "3.2 x 10^5" */
@@ -524,7 +564,12 @@ function cleanAnswers_(raw, exam) {
       if (typeof v === 'string' && v !== '') out[q.id] = v.slice(0, q.type === 'ID' ? MAX_ID : MAX_ESSAY);
     } else if (typeof v === 'object') {
       var a = String(v.a == null ? '' : v.a).slice(0, MAX_FINAL), s = String(v.s == null ? '' : v.s).slice(0, MAX_SOLUTION);
-      if (a || s) out[q.id] = { a: a, s: s };
+      var p = {}, anyPart = false;
+      (q.parts || []).forEach(function (pt) {
+        var x = v.p && v.p[pt.l];
+        if (typeof x === 'string' && x !== '') { p[pt.l] = x.slice(0, MAX_FINAL); anyPart = true; }
+      });
+      if (a || s || anyPart) out[q.id] = anyPart ? { a: a, s: s, p: p } : { a: a, s: s };
     }
   });
   return out;
@@ -542,6 +587,7 @@ function publicExam_(exam, live) {
     questions: order.map(function (id) {
       var q = byId[id];
       var out = { id: q.id, type: q.type, text: q.text, points: q.points };
+      if (q.parts && q.parts.length) out.parts = q.parts.map(function (pt) { return { l: pt.l, t: pt.t, p: pt.p }; });
       if (q.type === 'MC') {
         var letters = String(live.corder[q.id] || '').split('').filter(function (l) { return letterIndex_(l) < q.choices.length; });
         q.choices.forEach(function (c, i) { if (letters.indexOf(letter_(i)) < 0) letters.push(letter_(i)); });
@@ -589,6 +635,14 @@ function questions_(examId) {
                 answer: String(r[6]).trim(), tol: r[7] === '' ? 0 : Number(r[7]) || 0,
                 points: r[8] === '' ? 1 : Math.max(0, Number(r[8]) || 0), solution: String(r[9] || '') };
       if (q.type === 'MC') { q.choices = String(r[5]).split('\n').filter(function (c) { return c.trim(); }); q.answer = q.answer.toUpperCase(); }
+      if (q.type === 'PS' && /^\s*\[/.test(String(r[5]))) {
+        // sub-questions are kept as JSON in the Choices column: [{l: "a", t: text, a: answer, tol: %, p: points}]
+        q.parts = parseJson_(String(r[5]), []).map(function (pt, i) {
+          return { l: letter_(i).toLowerCase(), t: String(pt.t || ''), a: String(pt.a == null ? '' : pt.a), tol: Number(pt.tol) || 0, p: Math.max(0, Number(pt.p) || 0) };
+        });
+        if (q.parts.length) q.points = round_(q.parts.reduce(function (t, pt) { return t + pt.p; }, 0));
+        else delete q.parts;
+      }
       return q;
     });
   cachePut_('q:' + examId, list);
@@ -739,6 +793,15 @@ function admin_saveExam(obj) {
       out.choices = [];
       out.answer = type === 'ES' ? '' : String(q.answer || '').trim().slice(0, 300);
       out.tol = type === 'PS' ? (q.tol === '' || q.tol == null ? 0 : Math.max(0, Number(q.tol) || 0)) : '';
+      if (type === 'PS' && q.parts && q.parts.length) {
+        if (q.parts.length > 12) throw new Error('Question ' + n + ' has more than 12 parts.');
+        out.parts = q.parts.map(function (pt, j) {
+          return { l: letter_(j).toLowerCase(), t: String(pt.t || '').trim().slice(0, 5000), a: String(pt.a == null ? '' : pt.a).trim().slice(0, 300),
+                   tol: pt.tol === '' || pt.tol == null ? 0 : Math.max(0, Number(pt.tol) || 0), p: Math.max(0, Number(pt.p) || 0) };
+        });
+        out.points = round_(out.parts.reduce(function (t, pt) { return t + pt.p; }, 0));
+        out.answer = '';
+      }
     }
     return out;
   });
@@ -758,7 +821,8 @@ function admin_saveExam(obj) {
     if (obj.questions) {
       var keep = rows_(TABS.QUESTIONS, Q_HEAD.length).filter(function (x) { return String(x[0]) && String(x[0]) !== id; });
       var mine = qs.map(function (q, i) {
-        return [id, q.id, i + 1, q.type, txt_(q.text), txt_(q.choices.join('\n')), txt_(q.answer), q.tol, q.points, txt_(q.solution)];
+        var choices = q.parts ? JSON.stringify(q.parts) : q.choices.join('\n');
+        return [id, q.id, i + 1, q.type, txt_(q.text), txt_(choices), txt_(q.answer), q.tol, q.points, txt_(q.solution)];
       });
       // Plain-text columns, so answers such as 3/8 or 1-2 are not turned into dates
       writeTable_(TABS.QUESTIONS, Q_HEAD, keep.map(function (r) { return r.map(function (v) { return typeof v === 'string' ? txt_(v) : v; }); }).concat(mine), [5, 6, 7, 10]);
@@ -1095,7 +1159,10 @@ function admin_saveImage(dataUrl) {
 function imageIdsIn_(questions, withSolutions) {
   var ids = {};
   var scan = function (t) { String(t || '').replace(/\[image:([\w-]{4,40})\]/g, function (m, id) { ids[id] = 1; return m; }); };
-  questions.forEach(function (q) { scan(q.text); (q.choices || []).forEach(scan); if (withSolutions) scan(q.solution); });
+  questions.forEach(function (q) {
+    scan(q.text); (q.choices || []).forEach(scan); (q.parts || []).forEach(function (pt) { scan(pt.t); });
+    if (withSolutions) scan(q.solution);
+  });
   return Object.keys(ids);
 }
 

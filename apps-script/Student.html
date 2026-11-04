@@ -226,7 +226,19 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           '<div class="sol-preview-wrap"><div class="muted">Preview (math shown as it will look)</div><div class="sol-preview"></div></div></div>';
       } else {
         var a = answers[q.id] || {};
-        html += '<div class="final-label">Final answer</div><div class="answer-row"><input type="text" data-final="' + esc(q.id) + '" maxlength="200" autocomplete="off" spellcheck="false" value="' + esc(a.a || "") + '" placeholder="e.g. 20.4 or 3/8 or pi/4"><span class="muted">Numbers only, or an exact value. Units are optional.</span></div>' +
+        var hint = '<span class="muted">A number, an exact value (3/8, \\frac{3}{8}, \\sqrt{2}, 3.2\\times10^{5}) or a word. Units are optional.</span>';
+        if (q.parts && q.parts.length) {
+          html += q.parts.map(function (pt) {
+            var v = (a.p || {})[pt.l] || "";
+            return '<div class="part"><div class="part-q"><b>' + esc(pt.l) + ")</b> " + rich(pt.t, exam.images) + ' <span class="muted">(' + pt.p + " pt" + (pt.p === 1 ? "" : "s") + ")</span></div>" +
+              '<div class="answer-row"><span class="final-label" style="margin:0">Answer ' + esc(pt.l) + ')</span><input type="text" data-part="' + esc(q.id) + '" data-l="' + esc(pt.l) + '" maxlength="200" autocomplete="off" spellcheck="false" value="' + esc(v) + '"></div>' +
+              '<div class="ans-pv" hidden></div></div>';
+          }).join("") + '<p style="margin:4px 0 0">' + hint + "</p>";
+        } else {
+          html += '<div class="final-label">Final answer</div><div class="answer-row"><input type="text" data-final="' + esc(q.id) + '" maxlength="200" autocomplete="off" spellcheck="false" value="' + esc(a.a || "") + '" placeholder="e.g. 20.4 or 3/8 or pi/4">' + hint + "</div>" +
+            '<div class="ans-pv" hidden></div>';
+        }
+        html += "" +
           '<div class="solution-box"><span class="sol-label">Solution <span class="req">(show your work)</span></span><div class="toolbar">' +
           '<div class="tb-row"><span class="tb-tag">Symbols</span>' + SYMS.map(function (s) { return '<button type="button" class="sym" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div>" +
           '<div class="tb-row"><span class="tb-tag">Math</span>' + TEX.map(function (s) { return '<button type="button" class="sym tex" data-latex="1" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div></div>" +
@@ -263,10 +275,15 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       answers[t.dataset.essay] = t.value;
       wordCount(t);
       preview(t);
+    } else if (t.dataset.part !== undefined) {
+      var pa = answers[t.dataset.part] = answers[t.dataset.part] || { a: "", s: "" };
+      pa.p = pa.p || {};
+      pa.p[t.dataset.l] = t.value;
+      answerPreview(t);
     } else if (t.dataset.final !== undefined || t.dataset.sol !== undefined) {
       var id = t.dataset.final || t.dataset.sol;
       var a = answers[id] = answers[id] || { a: "", s: "" };
-      if (t.dataset.final !== undefined) a.a = t.value; else { a.s = t.value; preview(t); }
+      if (t.dataset.final !== undefined) { a.a = t.value; answerPreview(t); } else { a.s = t.value; preview(t); }
     } else return;
     dirty = true;
     $("#savestate").textContent = "Saving soon…";
@@ -289,6 +306,22 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var key = ta.dataset.sol || ta.dataset.essay;
     clearTimeout(pv[key]);
     pv[key] = setTimeout(function () { box.textContent = ta.value; typeset(box); }, 300);
+  }
+  // "Reads as": shows an answer typed with LaTeX or symbols the way it will be read, so typing mistakes show up
+  var apv = {};
+  function answerPreview(inp) {
+    var box = inp.closest(".answer-row").nextElementSibling;
+    if (!box || !box.classList.contains("ans-pv")) return;
+    var key = (inp.dataset.part || inp.dataset.final) + (inp.dataset.l || "");
+    clearTimeout(apv[key]);
+    apv[key] = setTimeout(function () {
+      var v = inp.value.trim().replace(/^\$+|\$+$/g, "");
+      if (!v || !/[\\^_{}\/]/.test(v)) { box.hidden = true; return; }
+      box.hidden = false;
+      box.innerHTML = '<span class="muted">Reads as:</span> ';
+      box.appendChild(document.createTextNode("\\(" + v.replace(/\*\*/g, "^").replace(/\*/g, " \\times ") + "\\)"));
+      typeset(box);
+    }, 350);
   }
   function wordCount(ta) {
     var el = view.querySelector('[data-wc="' + ta.dataset.essay + '"]');
@@ -315,6 +348,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function askSubmit() {
     var n = exam.questions.filter(function (q) {
       var a = answers[q.id];
+      if (q.type === "PS" && q.parts && q.parts.length) return q.parts.some(function (pt) { return !(a && a.p && String(a.p[pt.l] || "").trim()); });
       return q.type === "PS" ? !(a && String(a.a || "").trim()) : !(a && String(a).trim());
     }).length;
     overlay("Submit exam?", (n ? "You have " + n + " unanswered question" + (n > 1 ? "s" : "") + ". " : "") +
@@ -432,8 +466,16 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
             (q.solution ? '<div class="review-sol"><b>Guide / model answer:</b>\n' + rich(q.solution, r.images) + "</div>" : "");
         } else {
           var m = q.mine || {};
-          html += '<div class="mine"><b>Your final answer:</b> ' + esc(m.a || "(blank)") + (m.s ? "\n\n<b>Your solution:</b>\n" + esc(m.s) : "") + "</div>" +
-            '<div class="review-key"><b>Correct answer:</b> ' + esc(String(q.answer).split("|").join(" or ")) + "</div>" +
+          if (q.parts) {
+            html += q.parts.map(function (pt) {
+              var mine = (m.p || {})[pt.l];
+              return '<div class="part"><div class="part-q"><b>' + esc(pt.l) + ")</b> " + rich(pt.t, r.images) + "</div>" +
+                '<div class="mine">' + (pt.ok ? "✅" : "❌") + " <b>Your answer:</b> " + esc(mine || "(blank)") + ' · <span class="muted">' + pt.got + " / " + pt.p + "</span></div>" +
+                '<div class="review-key"><b>Correct answer:</b> ' + esc(String(pt.a).split("|").map(function (x) { return x.trim(); }).join(" or ")) + "</div></div>";
+            }).join("") + (m.s ? '<div class="mine"><b>Your solution:</b>\n' + esc(m.s) + "</div>" : "");
+          } else html += '<div class="mine"><b>Your final answer:</b> ' + esc(m.a || "(blank)") + (m.s ? "\n\n<b>Your solution:</b>\n" + esc(m.s) : "") + "</div>" +
+            '<div class="review-key"><b>Correct answer:</b> ' + esc(String(q.answer).split("|").join(" or ")) + "</div>";
+          html += "" +
             (q.solution ? '<div class="review-sol"><b>Solution:</b>\n' + rich(q.solution, r.images) + "</div>" : "");
         }
         html += "</section>";

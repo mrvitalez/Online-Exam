@@ -44,12 +44,20 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
   - **Problem solving:** the student types a final answer (checked automatically: a number within the tolerance, an
     exact value like `3/8` or `pi/4`, or a formula like `x^2 + C`; units are ignored) and writes a solution with a math
     toolbar.
+    A problem can have **parts** (a, b, c …), each with its own answer, tolerance and points; the question is worth
+    the sum of its parts. Answers can be numbers, exact values, LaTeX (`\frac{3}{8}`, `3.2\times10^{5}`,
+    `2\sqrt{3}`), with or without units, or words (`north`). Students see a "Reads as" preview of LaTeX they type.
   - **Essay:** the student writes a long answer; you give the points in Results. An optional `Rubric:` / `Guide:` is
     shown to students with the solutions.
 - The type comes from headings such as `Part II. Identification`, `ESSAY` or `Part IV. Problem solving`, or a
   `Type: essay` line under a question. Without one, it is guessed: choices → multiple choice; a numeric or formula
   answer or a solution → problem solving; a word answer → identification; no answer → essay. Check the preview.
 - Points written in a question, like `(5 points)` or `[2 pts]`, are used for that question.
+- **Problems with parts:** write the parts as `a)`, `b)` … lines and give each part its answer, in any of these ways:
+  an `Answer:` line under each part; one line `Answer: a) 20.4  b) 2.04`; or `Answers:` followed by `a) 20.4`,
+  `b) 2.04` lines. `(2 pts)` on a part sets its points; otherwise the problem's points are shared equally. A problem
+  with one overall answer keeps its `a)` `b)` lines as part of the question; use **Split into parts** in the editor to
+  give them separate answers.
 - After **Read questions**, check every question in the preview: change its **type**, choose the **correct answer**
   (multiple choice) or type the **accepted answers**, answer, tolerance and solution, and set its **points**. All of
   this can also be changed later in the question list.

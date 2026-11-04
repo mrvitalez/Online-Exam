@@ -132,6 +132,20 @@ Answer key
   check(PT.items[3].solution === 'mentions scattering' && PT.items[3].points === 10 && PT.items[4].points === 10 && PT.items[4].answer === '', 'paste: essay rubric and points');
   const PU = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }), '1. Who wrote Noli Me Tangere?\nAnswer: Jose Rizal\n2. Discuss the role of mathematics in art.\n3. Solve 2x = 10.\nAnswer: 5');
   check(PU.items.map((q) => q.type).join(',') === 'ID,ES,PS', 'paste: without headings, the type is guessed from the answer', PU.items.map((q) => q.type).join(','));
+  // problem solving with parts
+  const PP = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 6, es: 10, tol: 1 }),
+    'Part I. Problem solving\n1. A ball is thrown up at 20 m/s.\na) Find the maximum height.\nAnswer: 20.4\nb) Find the time to reach it. (2 pts)\nAnswer: 2.04 s\n' +
+    '2. Two dice are rolled.\na) How many outcomes are there?\nb) What is the probability of a sum of 7?\nAnswer: a) 36  b) \\frac{1}{6}\n' +
+    '3. A car moves north at 10 m/s.\n(a) What is its direction?\n(b) How far does it go in 5 s?\n(c) Its speed in km/h?\nAnswers:\n(a) north\n(b) 50 m\n(c) 36\nSolution:\nd = vt\n' +
+    '4. Find the probability of rolling a 7 with two dice.\na) list the outcomes\nb) give the probability\nAnswer: 1/6');
+  check(PP.items.length === 4 && PP.items.slice(0, 3).every((q) => q.type === 'PS' && q.parts && q.parts.length >= 2), 'paste: problems with parts found', JSON.stringify(PP.items.map((q) => [q.type, q.parts && q.parts.length])));
+  check(PP.items[0].parts.map((x) => x.a).join('|') === '20.4|2.04 s' && PP.items[0].parts.map((x) => x.p).join(',') === '4,2' && PP.items[0].points === 6 && PP.items[0].parts[1].t === 'Find the time to reach it.',
+    'paste: "Answer:" under each part, "(2 pts)" on a part, the rest of the points shared', JSON.stringify(PP.items[0]));
+  check(PP.items[1].parts.map((x) => x.a).join('|') === '36|\\frac{1}{6}' && PP.items[1].text === 'Two dice are rolled.', 'paste: one answer line for all parts (with LaTeX)', JSON.stringify(PP.items[1]));
+  check(PP.items[2].parts.map((x) => x.a).join('|') === 'north|50 m|36' && PP.items[2].solution === 'd = vt' && PP.items[2].parts.every((x) => x.p === 2), 'paste: "Answers:" list of part answers, points shared equally', JSON.stringify(PP.items[2]));
+  check(!PP.items[3].parts && PP.items[3].answer === '1/6' && /a\) list the outcomes/.test(PP.items[3].text), 'paste: one overall answer keeps a) b) lines inside the question');
+  const PK = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }), '1. Pick y\nA. x\nB. y\n2. Pick x\nA. x\nB. y\nAnswers\n1. B\n2. A');
+  check(PK.items.length === 2 && PK.items.map((q) => q.answer).join('') === 'BA', 'paste: an "Answers" key section after questions with choices still works', JSON.stringify(PK.items.map((q) => q.answer)));
   const P2 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1) What is 2+2?\n(a) 3\n(b) 4\nAns: b\n\n2. Velocity after 3 s from rest at 2 m/s²?\nAnswer: 6 m/s\nSolution: v = at\n1. wrong-looking step\n= 6 m/s');
   const P3 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1. Explain your\nsolution clearly. What is 2 + 2?\nAnswer: 4\nSolution - add them\n2. Next?\nAnswer: 1\nSol.\nobvious');
   check(P3.items.length === 2 && P3.items[0].text.includes('solution clearly') && P3.items[0].solution === 'add them' && P3.items[1].solution === 'obvious', 'paste: a sentence starting with "solution" is not a Solution label', JSON.stringify(P3.items.map((q) => [q.text, q.solution])));
@@ -368,6 +382,57 @@ Answer key
   check(await s6.$('.q-card img.qimg') !== null, 'review: picture shown');
   check(/Rayleigh scattering/.test(rv5) && /Accepted answers: Mitochondria, mitochondrion/.test(rv5) && /8 \/ 10/.test(rv5), 'review: identification, essay points and guide shown', rv5.slice(0, 300));
   await s6.screenshot({ path: out + '/s-review2.png', fullPage: true });
+
+  // ---------- problem solving with parts: edit, take, check ----------
+  await ad.click('[data-tab=exams]'); await ad.click('#new'); await ad.waitForTimeout(200);
+  await ad.selectOption('#f-subject', 'MMW'); await ad.fill('#f-title', 'Quiz 3'); await ad.selectOption('#f-status', 'Published');
+  await ad.fill('#paste', '1. A ball is thrown straight up at 20 m/s.\na) Find the maximum height in m.\nb) Find the time to reach it, in s.\nAnswer: 20.4\nSolution: v² = v0² − 2gh');
+  await ad.click('#read'); await ad.waitForTimeout(150); await ad.click('#p-add'); await ad.waitForTimeout(300);
+  await ad.click('#qlist [data-split="0"]'); await ad.waitForTimeout(200);
+  check(await ad.inputValue('#qlist textarea[data-f="ptext"][data-j="1"]') === 'Find the time to reach it, in s.' && await ad.inputValue('#qlist input[data-f="pans"][data-j="0"]') === '20.4',
+    'editor: "Split into parts" makes parts from a) b) lines and keeps the answer');
+  await ad.fill('#qlist input[data-f="pans"][data-j="1"]', '2.04');
+  await ad.fill('#qlist input[data-f="ppts"][data-j="0"]', '3'); await ad.fill('#qlist input[data-f="ppts"][data-j="1"]', '2');
+  check(await ad.inputValue('#qlist input[data-f="points"]') === '5', 'editor: question points are the sum of the parts');
+  await ad.click('#qlist [data-addpart="0"]'); await ad.waitForTimeout(150);
+  await ad.fill('#qlist textarea[data-f="ptext"][data-j="2"]', 'Which direction is the ball moving at the top? (word)');
+  await ad.fill('#qlist input[data-f="pans"][data-j="2"]', 'none | at rest | stationary');
+  await ad.fill('#qlist input[data-f="ppts"][data-j="2"]', '1');
+  await ad.click('#add-ps'); await ad.waitForTimeout(150);
+  await ad.fill('#qlist [data-card="1"] textarea[data-f="text"]', 'Evaluate.\na) 3/8 as a decimal\nb) 2√3 squared');
+  await ad.click('#qlist [data-split="1"]'); await ad.waitForTimeout(150);
+  await ad.fill('#qlist [data-card="1"] input[data-f="pans"][data-j="0"]', '0.375'); await ad.fill('#qlist [data-card="1"] input[data-f="pans"][data-j="1"]', '12');
+  await ad.click('#save'); await ad.waitForTimeout(600);
+  const q3 = H.ctx.exams_().find((x) => x.title === 'Quiz 3');
+  const q3q = H.ctx.questions_(q3.id);
+  check(q3q[0].parts.length === 3 && q3q[0].points === 6 && q3q[0].parts[2].a === 'none | at rest | stationary' && q3q[1].parts.length === 2, 'saved: parts with their answers and points', JSON.stringify(q3q.map((q) => [q.points, q.parts])));
+  await ad.screenshot({ path: out + '/a-parts.png', fullPage: true });
+  const s7 = await open(juan);
+  await s7.click(`[data-start="${q3.id}"]`); await s7.click('#ov-ok'); await s7.waitForTimeout(500);
+  const pid = await s7.$$eval('.q-card', (els) => els.map((e) => e.dataset.q));
+  await s7.fill(`[data-part="${pid[0]}"][data-l="a"]`, '20.4 m');
+  await s7.fill(`[data-part="${pid[0]}"][data-l="b"]`, '\\frac{51}{25}');      // 2.04 typed as LaTeX
+  await s7.fill(`[data-part="${pid[0]}"][data-l="c"]`, 'At rest.');
+  await s7.fill(`[data-part="${pid[1]}"][data-l="a"]`, '\\frac{3}{8}');
+  await s7.fill(`[data-part="${pid[1]}"][data-l="b"]`, '13');                    // wrong
+  await s7.waitForTimeout(500);
+  check(/Reads as/.test(await s7.textContent(`.q-card[data-q="${pid[0]}"] .part >> nth=1`)) && !(await s7.isVisible(`.q-card[data-q="${pid[0]}"] .part >> nth=2 >> .ans-pv`)), 'student: "Reads as" preview for LaTeX answers only');
+  await s7.screenshot({ path: out + '/s-parts.png', fullPage: true });
+  await s7.click('#submit'); await s7.click('#ov-ok'); await s7.waitForTimeout(600);
+  await ad.reload(); await ad.waitForTimeout(400);
+  await ad.click('[data-tab=results]'); await ad.waitForTimeout(400);
+  await ad.selectOption('#r-exam', q3.id); await ad.waitForTimeout(700);
+  const r7 = (await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ")')).replace(/\s+/g, ' ');
+  check(/8\.5 \/ 11/.test(r7), 'parts checked one by one: LaTeX, units and words accepted; one wrong part loses only its points', r7);
+  await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300);
+  const d7 = (await ad.textContent('#r-body .detail')).replace(/\s+/g, ' ');
+  check(/❌ b\) .*answer: 13 · key: 12 · 0 \/ 2\.5/.test(d7) && /✅ c\)/.test(d7), 'results: each part with its answer, key and points', d7.slice(0, 400));
+  await ad.screenshot({ path: out + '/a-parts-results.png', fullPage: true });
+  H.as(H.ADMIN, () => { const x = H.ctx.admin_getExam(q3.id); x.showSolutions = 'After submitting'; H.ctx.admin_saveExam(x); });
+  const s8 = await open(juan);
+  await s8.click(`[data-review="${q3.id}"]`); await s8.waitForTimeout(500);
+  const rv8 = (await s8.textContent('#view')).replace(/\s+/g, ' ');
+  check(/✅ Your answer: \\frac\{51\}\{25\}/.test(rv8) && /❌ Your answer: 13 · 0 \/ 2\.5/.test(rv8) && /Correct answer: none or at rest or stationary/.test(rv8), 'review: each part with the student\'s answer and the correct one', rv8.slice(0, 500));
 
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);
