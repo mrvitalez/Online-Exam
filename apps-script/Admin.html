@@ -86,6 +86,43 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function letter(i) { return String.fromCharCode(65 + i); }
   var TYPES = [["MC", "Multiple choice"], ["ID", "Identification"], ["PS", "Problem solving"], ["ES", "Essay"]];
   function typeName(t) { return (TYPES.filter(function (x) { return x[0] === t; })[0] || ["", "Problem solving"])[1]; }
+  function typeSelect(cur, attrs) {
+    return "<select " + attrs + ">" + TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (cur === t[0] ? " selected" : "") + ">" + t[1] + "</option>"; }).join("") + "</select>";
+  }
+  /**
+   * Changes a question's type without losing anything: lettered lines in the question become choices when it turns
+   * into multiple choice, and choices go back into the question as lettered lines when it turns into something else.
+   */
+  function convertType(q, to, def) {
+    if (q.type === to) return q;
+    var from = q.type;
+    if (to === "MC") {
+      if (!q.choices || q.choices.length < 2) {
+        var keep = [], found = [];
+        String(q.text || "").split("\n").forEach(function (line) {
+          var m = line.trim().match(/^\(?([A-Ha-h])[.)]\s*(.+)$/);
+          if (m && m[1].toUpperCase().charCodeAt(0) - 65 === found.length) found.push(m[2].trim()); else keep.push(line);
+        });
+        if (found.length >= 2) { q.choices = found; q.text = keep.join("\n").trim(); }
+        else q.choices = ["", "", "", ""];
+      }
+      var lm = String(q.answer || "").trim().match(/^\(?([A-Ha-h])\)?(?:[.):\s]|$)/);
+      q.answer = lm && lm[1].toUpperCase().charCodeAt(0) - 65 < q.choices.length ? lm[1].toUpperCase() : (q._mcAnswer || "");
+      q.tol = "";
+    } else {
+      if (from === "MC") {
+        var lines = (q.choices || []).filter(String).map(function (c, j) { return letter(j) + ". " + c; });
+        if (lines.length) q.text = (q.text + "\n" + lines.join("\n")).trim();
+        q.choices = [];
+        if (/^[A-H]$/.test(q.answer || "")) { q._mcAnswer = q.answer; q.answer = ""; }   // remembered in case it is switched back
+      }
+      if (to === "ES") { if (q.answer && !q.solution) q.solution = q.answer; q.answer = ""; }
+      if (from === "ES" && !q.answer && q.solution && to === "ID") { q.answer = q.solution; q.solution = ""; }
+      q.tol = to === "PS" ? (q.tol === "" || q.tol == null ? (def && def.tol != null ? def.tol : 1) : q.tol) : "";
+    }
+    q.type = to;
+    return q;
+  }
   function stateLabel(x) {
     return { draft: '<span class="pill">Draft</span>', upcoming: '<span class="pill">Scheduled</span>', open: '<span class="pill open">Open now</span>',
              closed: '<span class="pill bad">Closed</span>' }[x.state] || "";
@@ -411,9 +448,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       if (!q) return;
       if (t.dataset.f === "type") {
         readForm();
-        q.type = t.value;
-        if (q.type === "MC") { if (!q.choices || q.choices.length < 2) q.choices = ["", "", "", ""]; q.answer = /^[A-H]$/.test(q.answer) ? q.answer : "A"; }
-        else { q.answer = /^[A-H]$/.test(q.answer || "") || q.type === "ES" ? "" : q.answer; if (q.type === "PS" && (q.tol === "" || q.tol == null)) q.tol = 1; }
+        convertType(q, t.value);
         markDirty(); editor(); scrollToCard(i);
       } else if (t.dataset.f === "answer" && q.type === "MC") { q.answer = t.value; markDirty(); }
     });
@@ -465,17 +500,21 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         (warnCount ? " " + warnCount + " need attention (marked below); you can fix them after adding." : " Everything looks complete.") :
         "No numbered questions were found. Start each question with its number, like <b>1.</b>") +
       (p.warnings.length ? '<ul style="margin:6px 0 0">' + p.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul>" : "") + "</div>" +
-      (p.items.length ? '<div class="btnrow" style="margin:10px 0"><button class="btn" id="p-add">Add these to the exam</button>' +
+      (p.items.length ? '<div class="btnrow" style="margin:10px 0;align-items:center"><button class="btn" id="p-add">Add these to the exam</button>' +
         (ED.questions.length ? '<button class="btn ghost" id="p-replace">Replace all ' + ED.questions.length + " current questions</button>" : "") +
-        '<button class="btn ghost" id="p-clear">Discard</button></div>' : "") +
+        '<button class="btn ghost" id="p-clear">Discard</button>' +
+        '<label class="check" style="margin-left:auto">Set all to ' + typeSelect("", 'id="p-all"').replace("<select id=\"p-all\">", '<select id="p-all"><option value="">…</option>') + "</label></div>" +
+        '<p class="muted" style="margin:0 0 8px">Wrong type? Change it on each question below (or all at once above). You can also change it later in the question list.</p>' : "") +
       '<div id="p-list">' + p.items.map(function (q, i) {
         var w = qWarnings(q);
         var html = esc(q.text);
         if (q.type === "MC") html += '<ol type="A">' + q.choices.map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
         else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + esc(q.solution) : "";
         else html += "\n\n<b>Answer:</b> " + esc(q.answer || "—") + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
-        return '<div class="qedit' + (w.length ? " warn" : "") + '"><div class="qe-head"><b>#' + (i + 1) + "</b><span class=\"pill\">" + typeName(q.type) +
-          "</span><span class=\"muted\">" + q.points + " pt" + (q.points === 1 ? "" : "s") + (q.type === "PS" ? " · tolerance " + q.tol + "%" : "") + "</span></div>" +
+        return '<div class="qedit' + (w.length ? " warn" : "") + '" data-pcard="' + i + '"><div class="qe-head"><b>#' + (i + 1) + "</b>" +
+          '<label class="check">Type ' + typeSelect(q.type, 'data-ptype="' + i + '"') + "</label>" +
+          '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-ppts="' + i + '" value="' + esc(q.points) + '"></label>' +
+          (q.type === "PS" ? '<span class="muted">tolerance ' + q.tol + "%</span>" : "") + "</div>" +
           '<div class="rendered">' + html + "</div>" + (w.length ? '<div class="warnline">⚠️ ' + w.map(esc).join(" · ") + "</div>" : "") + "</div>";
       }).join("") + "</div>";
     typeset(box);
@@ -490,6 +529,33 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (document.getElementById("p-add")) document.getElementById("p-add").onclick = function () { add(false); };
     if (document.getElementById("p-replace")) document.getElementById("p-replace").onclick = function () { if (confirm("Replace all current questions with the pasted ones?")) add(true); };
     if (document.getElementById("p-clear")) document.getElementById("p-clear").onclick = function () { parsed = null; box.innerHTML = ""; };
+    var tolDef = Number((document.getElementById("d-tol") || {}).value) || 1;
+    var defPts = function (t) { var el = document.getElementById("d-" + t.toLowerCase()); return el ? Number(el.value) || 0 : 1; };
+    var retype = function (q, to) {
+      var wasDefault = Number(q.points) === defPts(q.type);
+      convertType(q, to, { tol: tolDef });
+      if (wasDefault) q.points = defPts(to);   // points the file did not set follow the new type's default
+    };
+    box.querySelectorAll("[data-ptype]").forEach(function (sel) {
+      sel.onchange = function () {
+        var i = Number(sel.dataset.ptype);
+        retype(p.items[i], sel.value);
+        var y = sel.getBoundingClientRect().top;
+        showParsed();
+        var again = box.querySelector('[data-ptype="' + i + '"]');
+        if (again) window.scrollBy(0, again.getBoundingClientRect().top - y);   // keep the question where it was on screen
+      };
+    });
+    box.querySelectorAll("[data-ppts]").forEach(function (inp) {
+      inp.oninput = function () { p.items[Number(inp.dataset.ppts)].points = inp.value === "" ? 0 : Number(inp.value); };
+    });
+    if (document.getElementById("p-all")) document.getElementById("p-all").onchange = function () {
+      var to = this.value;
+      if (!to) return;
+      if (!confirm("Change all " + p.items.length + " questions to " + typeName(to).toLowerCase() + "?")) { this.value = ""; return; }
+      p.items.forEach(function (q) { retype(q, to); });
+      showParsed();
+    };
   }
 
   // ---------- reading a Word file (.docx) ----------

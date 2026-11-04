@@ -184,6 +184,24 @@ Answer key
   const pasteBox = await ad.inputValue('#paste');
   check(pasteBox.includes('2. Simplify $\\frac{x^{2}}{x}$.') && pasteBox.includes('B. Mercury') && pasteBox.includes('1. A car travels'), 'word file: equation converted to LaTeX, list numbers rebuilt', JSON.stringify(pasteBox.slice(0, 260)));
   await ad.screenshot({ path: out + '/a-docx.png', fullPage: true });
+  // change types in the preview
+  await ad.selectOption('[data-ptype="0"]', 'ID'); await ad.waitForTimeout(150);
+  const asId = await ad.textContent('[data-pcard="0"] .rendered');
+  check(/A\. Venus/.test(asId) && /D\. Mars/.test(asId) && /1 identification/.test(await ad.textContent('#parsed')), 'preview: type changed; choices kept as lines of the question', asId.replace(/\s+/g, ' '));
+  await ad.selectOption('[data-ptype="0"]', 'MC'); await ad.waitForTimeout(150);
+  check((await ad.$$eval('[data-pcard="0"] .rendered li', (l) => l.map((x) => x.textContent))).join(',') === 'Venus,Mercury,Earth,Mars', 'preview: back to multiple choice, lines become choices again');
+  check(await ad.$eval('[data-pcard="0"] .rendered li.key', (l) => l.textContent) === 'Mercury', 'preview: the correct choice is remembered when switching back');
+  await ad.selectOption('[data-ptype="2"]', 'ES'); await ad.waitForTimeout(150);
+  check(await ad.inputValue('[data-ppts="2"]') === '10', 'preview: points follow the new type when the file did not set them', await ad.inputValue('[data-ppts="2"]'));
+  await ad.fill('[data-ppts="1"]', '4');
+  await ad.selectOption('#p-all', 'ID'); await ad.waitForTimeout(150);
+  check(/Found 3 questions: 3 identification/.test(await ad.textContent('#parsed')), 'preview: "Set all to" changes every question');
+  await ad.selectOption('[data-ptype="1"]', 'MC'); await ad.selectOption('[data-ptype="2"]', 'PS'); await ad.waitForTimeout(150);
+  await ad.click('#p-add'); await ad.waitForTimeout(200);
+  const types = await ad.$$eval('#qlist select[data-f="type"]', (s) => s.map((x) => x.value));
+  check(types.join(',') === 'ID,MC,PS' && await ad.inputValue('#qlist [data-card="1"] input[data-f="points"]') === '4', 'preview: chosen types and points are added to the exam', types.join(','));
+  await ad.selectOption('#qlist [data-card="0"] select[data-f="type"]', 'MC'); await ad.waitForTimeout(150);
+  check(await ad.inputValue('#qlist [data-card="0"] textarea[data-f="choices"]') === 'Venus\nMercury\nEarth\nMars', 'editor: changing to multiple choice turns lettered lines into choices');
   if (havePdfJs) {
     await ad.setInputFiles('#file', PDF_FILE); await ad.waitForTimeout(2500);
     const pdfRes = (await ad.textContent('#parsed')).replace(/\s+/g, ' ');
