@@ -556,5 +556,6 @@ function setup() {
   CacheService.getScriptCache().remove(CFG_CACHE_KEY);
   syncResults(true);
   ss.getSheetByName(SHEETS.settings).activate();
-  SpreadsheetApp.getUi().alert('Setup complete', 'Edit the Settings, Questions, Sections and Students sheets. Then deploy the web app (see the setup guide) and use Exam > Show the exam link.', SpreadsheetApp.getUi().ButtonSet.OK);
+  // A toast (not an alert) so the run finishes without waiting for someone to click OK in the Sheet.
+  ss.toast('Edit the Settings, Questions, Sections and Students sheets, then deploy the web app (see README).', 'Setup complete', 15);
 }
