@@ -1,0 +1,811 @@
+<body class="admin">
+<div class="banner">🛠️ <b>Exam Admin</b> &nbsp;—&nbsp; instructor tools<span>&nbsp;·&nbsp; Rizal Technological University</span></div>
+<header class="hero"><div class="inner"><div class="txt">
+<span class="eyebrow">Online Exams · Instructor site</span>
+<h1>Exam admin</h1>
+<p>Create exams by pasting your questions, choose which block sections take them, import your class list from the record book,
+and check every student's answers, solutions and tab-switch log. Students never see this page.</p>
+<div class="hchips"><span class="who" id="who"></span><a class="cta" id="open-student" target="_blank" rel="noopener" href="#">🎓 Open student site</a>
+<a class="cta" id="open-sheet" target="_blank" rel="noopener" href="#" style="background:rgba(255, 255, 255,.14);color:#FFFFFF;box-shadow:none">📊 Open Google Sheet</a></div>
+</div></div></header>
+<main>
+<div class="admin-tabs" id="tabs"></div>
+<div id="view"><div class="loading"><div class="spinner"></div>Loading…</div></div>
+</main>
+<div class="toast" id="toast" hidden></div>
+
+<script>window.BOOT = <?!= boot ?>;</script>
+<script>
+window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath: [['\\[', '\\]'], ['$$', '$$']] },
+                   options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'input', 'select'] },
+                   startup: { typeset: false } };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
+<script>
+(function () {
+  "use strict";
+  var BOOT = window.BOOT || {};
+  var A = null;              // admin_load()
+  var tab = "overview";
+  var view = document.getElementById("view");
+  var TABS = [["overview", "📋 Overview"], ["exams", "📝 Exams"], ["results", "📊 Results"], ["roster", "🧑‍🎓 Class list"], ["settings", "⚙️ Settings"]];
+  var ED = null;             // exam being edited
+  var edDirty = false;
+  var parsed = null;         // last pasted questions
+  var resExam = "", resData = null, resSection = "", resOpen = {}, resTimer = 0;
+  var rosterData = null, book = null, rosterFilter = { subject: "", section: "", q: "" };
+
+  document.getElementById("who").textContent = "Signed in as " + (BOOT.email || "");
+  document.getElementById("open-sheet").href = BOOT.sheetUrl || "#";
+  document.getElementById("open-student").href = BOOT.pagesUrl || BOOT.url || "#";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function call(fn) {
+    var args = [].slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+        reject(e && e.message ? e : new Error(String(e)));
+      });
+      r[fn].apply(r, args);
+    });
+  }
+  var toastTimer;
+  function toast(msg, err) {
+    var t = document.getElementById("toast");
+    t.textContent = msg; t.className = "toast" + (err ? " err" : ""); t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, err ? 7000 : 3000);
+  }
+  function busy(btn, on, text) {
+    if (!btn) return;
+    if (on) { btn.dataset.label = btn.textContent; btn.textContent = text || "Saving…"; btn.disabled = true; }
+    else { btn.textContent = btn.dataset.label || btn.textContent; btn.disabled = false; }
+  }
+  function typeset(el) {
+    function go() {
+      if (window.MathJax && MathJax.typesetPromise) {
+        if (MathJax.typesetClear) MathJax.typesetClear([el]);
+        return MathJax.typesetPromise([el]).catch(function () {});
+      }
+      setTimeout(go, 300);
+    }
+    go();
+  }
+  function when(ms) {
+    if (!ms) return "—";
+    return new Date(ms).toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  function nowLocal() {
+    var d = new Date(Date.now() + 8 * 3600000); // Philippine time for a datetime-local field
+    return d.toISOString().slice(0, 16);
+  }
+  function dur(sec) { sec = Math.round(sec || 0); return sec < 60 ? sec + "s" : Math.floor(sec / 60) + "m " + (sec % 60) + "s"; }
+  function letter(i) { return String.fromCharCode(65 + i); }
+  function stateLabel(x) {
+    return { draft: '<span class="pill">Draft</span>', upcoming: '<span class="pill">Scheduled</span>', open: '<span class="pill open">Open now</span>',
+             closed: '<span class="pill bad">Closed</span>' }[x.state] || "";
+  }
+  function subjectsList() { return Object.keys(A.subjects || {}).sort(); }
+  function sectionsOf(subject) {
+    var key = String(subject || "").toUpperCase().replace(/[^A-Z0-9]/g, ""), out = [];
+    Object.keys(A.subjects || {}).forEach(function (s) {
+      if (s.toUpperCase().replace(/[^A-Z0-9]/g, "") === key) out = out.concat(Object.keys(A.subjects[s]));
+    });
+    return out.sort();
+  }
+
+  function renderTabs() {
+    document.getElementById("tabs").innerHTML = TABS.map(function (t) {
+      return '<button type="button" data-tab="' + t[0] + '" class="' + (t[0] === tab ? "on" : "") + '">' + t[1] + "</button>";
+    }).join("");
+    document.querySelectorAll("#tabs button").forEach(function (b) {
+      b.onclick = function () {
+        if (tab === "exams" && ED && edDirty && !confirm("You have unsaved changes to this exam. Leave without saving?")) return;
+        if (b.dataset.tab !== "exams") { ED = null; edDirty = false; }
+        tab = b.dataset.tab; render();
+      };
+    });
+  }
+  function render() {
+    clearTimeout(resTimer);
+    renderTabs();
+    ({ overview: overview, exams: exams, results: results, roster: roster, settings: settings })[tab]();
+  }
+  window.addEventListener("beforeunload", function (e) { if (ED && edDirty) { e.preventDefault(); e.returnValue = ""; } });
+
+  // =====================================================================
+  // Overview
+  // =====================================================================
+  function overview() {
+    var live = A.exams.reduce(function (s, x) { return s + x.counts.live; }, 0);
+    var open = A.exams.filter(function (x) { return x.state === "open"; });
+    var soon = A.exams.filter(function (x) { return x.state === "upcoming"; });
+    var rows = open.concat(soon).map(function (x) {
+      return "<tr><td>" + esc(x.subject) + "</td><td>" + esc(x.title) + "</td><td>" + stateLabel(x) + "</td><td>" + when(x.opens) + "</td><td>" + when(x.closes) +
+        "</td><td>" + x.counts.live + "</td><td>" + x.counts.done + '</td><td><button class="btn small ghost" data-res="' + esc(x.id) + '">Results</button></td></tr>';
+    }).join("");
+    view.innerHTML = '<section class="ch"><h2>📋 Overview</h2><div class="grid2">' +
+      '<div class="stat"><div class="l">Subjects</div><div class="v">' + subjectsList().length + '</div><div class="muted">' + esc(subjectsList().join(", ") || "Import your class list") + "</div></div>" +
+      '<div class="stat"><div class="l">Students</div><div class="v">' + A.students + '</div><div class="muted">on the class list (all subjects)</div></div>' +
+      '<div class="stat"><div class="l">Exams</div><div class="v">' + A.exams.length + '</div><div class="muted">' + open.length + " open now · " + soon.length + " scheduled</div></div>" +
+      '<div class="stat"><div class="l">Taking an exam now</div><div class="v">' + live + '</div><div class="muted">students with an exam in progress</div></div></div>' +
+      (!A.studentUrl ? '<div class="notice">⚠️ Paste your web app address (ending in /exec) in <b>Settings</b> so the links work.</div>' : "") +
+      (!A.students ? '<div class="notice">⚠️ The class list is empty. Import it from your record book in <b>Class list</b>.</div>' : "") +
+      (!A.maintenance ? '<div class="notice">⚠️ The automatic submit trigger is missing. Run <b>setup</b> once from the Apps Script editor.</div>' : "") +
+      "<h3>Open and scheduled exams</h3>" + (rows ? '<div class="tw"><table class="data"><thead><tr><th>Subject</th><th>Exam</th><th>Status</th><th>Opens</th><th>Closes</th><th>Taking now</th><th>Submitted</th><th></th></tr></thead><tbody>' + rows + "</tbody></table></div>"
+        : '<p class="muted">No exam is open or scheduled. Create one in <b>Exams</b>.</p>') +
+      "<h3>Links</h3>" +
+      '<p>Give students this link: <a target="_blank" rel="noopener" href="' + esc(A.pagesUrl) + '">' + esc(A.pagesUrl) + "</a></p>" +
+      (A.studentUrl ? '<p>Web app (student site): <a target="_blank" rel="noopener" href="' + esc(A.studentUrl) + '">' + esc(A.studentUrl) + "</a><br>" +
+        'This admin site: <a target="_blank" rel="noopener" href="' + esc(A.studentUrl + "?page=admin") + '">' + esc(A.studentUrl) + "?page=admin</a></p>" : "") +
+      "</section>";
+    view.querySelectorAll("[data-res]").forEach(function (b) { b.onclick = function () { resExam = b.dataset.res; tab = "results"; render(); }; });
+  }
+
+  // =====================================================================
+  // Exams: list and editor
+  // =====================================================================
+  var examFilter = "";
+  function exams() {
+    if (ED) return editor();
+    var subs = {};
+    A.exams.forEach(function (x) { subs[x.subject] = 1; });
+    var list = A.exams.filter(function (x) { return !examFilter || x.subject === examFilter; })
+      .sort(function (a, b) { return a.subject.localeCompare(b.subject) || (b.opens || 0) - (a.opens || 0); });
+    view.innerHTML = '<section class="ch"><h2>📝 Exams</h2><p class="lead">Each exam belongs to one subject. Students see it only if they are on the class list for that subject ' +
+      "(and, if you choose, only in certain block sections), and only between its opening and closing times.</p>" +
+      '<div class="btnrow" style="align-items:flex-end;margin-bottom:12px"><button class="btn" id="new">+ New exam</button>' +
+      '<label class="field" style="min-width:200px">Subject<select id="filter"><option value="">All subjects</option>' +
+      Object.keys(subs).sort().map(function (s) { return "<option" + (s === examFilter ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") + "</select></label></div>" +
+      '<div class="tw"><table class="data"><thead><tr><th>Subject</th><th>Exam</th><th>Status</th><th>Opens</th><th>Closes</th><th>Items</th><th>Block sections</th><th>Taking now</th><th>Submitted</th><th></th></tr></thead><tbody>' +
+      (list.map(function (x) {
+        return "<tr><td>" + esc(x.subject) + '</td><td class="wrap"><b>' + esc(x.title) + "</b></td><td>" + stateLabel(x) + "</td><td>" + when(x.opens) + "</td><td>" + when(x.closes) +
+          "</td><td>" + x.count + '</td><td class="wrap">' + esc(x.sections.join(", ") || "All") + "</td><td>" + x.counts.live + "</td><td>" + x.counts.done +
+          '</td><td><div class="row-actions"><button class="btn small" data-edit="' + esc(x.id) + '">Edit</button><button class="btn small ghost" data-res="' + esc(x.id) + '">Results</button>' +
+          '<button class="btn small ghost" data-dup="' + esc(x.id) + '">Duplicate</button><button class="btn small danger" data-del="' + esc(x.id) + '">Delete</button></div></td></tr>';
+      }).join("") || '<tr><td colspan="10" class="muted">No exams yet. Click "New exam".</td></tr>') + "</tbody></table></div></section>";
+    document.getElementById("filter").onchange = function () { examFilter = this.value; exams(); };
+    document.getElementById("new").onclick = function () {
+      ED = { id: "", subject: examFilter || subjectsList()[0] || "", title: "", status: "Draft", opensText: "", closesText: "", limit: 60, sections: [], maxLeave: 3,
+             shuffleQ: false, shuffleC: false, blockCopy: true, showScore: false, showSolutions: "After closing", instructions: "", questions: [], counts: { live: 0, done: 0 } };
+      edDirty = false; parsed = null; editor();
+    };
+    view.querySelectorAll("[data-edit]").forEach(function (b) {
+      b.onclick = function () { busy(b, true, "Opening…"); call("admin_getExam", b.dataset.edit).then(function (x) { ED = x; edDirty = false; parsed = null; editor(); }).catch(function (e) { busy(b, false); toast(e.message, true); }); };
+    });
+    view.querySelectorAll("[data-res]").forEach(function (b) { b.onclick = function () { resExam = b.dataset.res; tab = "results"; render(); }; });
+    view.querySelectorAll("[data-dup]").forEach(function (b) {
+      b.onclick = function () { busy(b, true, "Copying…"); call("admin_duplicateExam", b.dataset.dup).then(function (x) { return reload().then(function () { ED = x; edDirty = false; editor(); toast("Copied as a draft."); }); }).catch(function (e) { busy(b, false); toast(e.message, true); }); };
+    });
+    view.querySelectorAll("[data-del]").forEach(function (b) {
+      b.onclick = function () {
+        var x = A.exams.filter(function (e) { return e.id === b.dataset.del; })[0];
+        if (!confirm('Delete "' + x.title + '" and its questions?' + (x.counts.done + x.counts.live ? "\n\nIts " + (x.counts.done + x.counts.live) + " student attempts stay in the Attempts sheet." : ""))) return;
+        busy(b, true, "Deleting…");
+        call("admin_deleteExam", x.id).then(function (d) { A = d; exams(); toast("Exam deleted."); }).catch(function (e) { busy(b, false); toast(e.message, true); });
+      };
+    });
+  }
+
+  function markDirty() { edDirty = true; var s = document.getElementById("ed-state"); if (s) { s.textContent = "Unsaved changes"; s.style.color = "var(--no)"; } }
+
+  function editor() {
+    var x = ED;
+    var subs = subjectsList();
+    var secs = sectionsOf(x.subject);
+    var total = x.questions.reduce(function (s, q) { return s + (Number(q.points) || 0); }, 0);
+    view.innerHTML = '<section class="ch"><h2>' + (x.id ? "Edit exam" : "New exam") + "</h2>" +
+      (x.counts && (x.counts.live || x.counts.done) ? '<div class="notice">⚠️ ' + x.counts.live + " student(s) are taking this exam and " + x.counts.done +
+        " have submitted. Fixing a typo or an answer is fine (scores are re-graded); avoid adding or removing questions now.</div>" : "") +
+      '<div class="form-grid" style="margin-top:12px">' +
+      '<label class="field">Subject<input type="text" id="f-subject" list="subj-list" value="' + esc(x.subject) + '" placeholder="e.g. MMW"><datalist id="subj-list">' +
+      subs.map(function (s) { return '<option value="' + esc(s) + '">'; }).join("") + "</datalist></label>" +
+      '<label class="field wide">Exam title<input type="text" id="f-title" value="' + esc(x.title) + '" placeholder="e.g. Midterm Examination"></label>' +
+      '<label class="field">Opens (Philippine time)<input type="datetime-local" id="f-opens" value="' + esc(x.opensText) + '"></label>' +
+      '<label class="field">Closes (Philippine time)<input type="datetime-local" id="f-closes" value="' + esc(x.closesText) + '"></label>' +
+      '<label class="field">Time limit (minutes)<input type="number" min="1" max="600" id="f-limit" value="' + esc(x.limit) + '"></label>' +
+      '<label class="field">Auto-submit after leaving the page<input type="number" min="0" id="f-leave" value="' + esc(x.maxLeave) + '"><span class="muted">times (0 = never, only record it)</span></label>' +
+      '<label class="field">Show solutions to students<select id="f-sol">' + ["After closing", "After submitting", "Never"].map(function (o) {
+        return "<option" + (o === x.showSolutions ? " selected" : "") + ">" + o + "</option>"; }).join("") + "</select></label>" +
+      (x.showSolutions === "After closing" && !x.closesText ? '<div class="warnline wide">⚠️ Solutions are set to show after closing, but this exam has no closing time, so students will not see them. Set a closing time (or use Close now later).</div>' : "") +
+      '<label class="field">Status<select id="f-status"><option value="Draft"' + (x.status !== "Published" ? " selected" : "") + '>Draft (hidden from students)</option>' +
+      '<option value="Published"' + (x.status === "Published" ? " selected" : "") + ">Published (on schedule)</option></select></label>" +
+      '<label class="field wide">Instructions shown to students<textarea id="f-instr" style="min-height:70px">' + esc(x.instructions) + "</textarea></label>" +
+      '<div class="wide"><div class="muted" style="font-weight:700">Block sections that take this exam</div><div id="f-secs" class="btnrow" style="margin-top:6px">' +
+      (secs.length ? secs.map(function (s) {
+        return '<label class="check"><input type="checkbox" value="' + esc(s) + '"' + (x.sections.indexOf(s) >= 0 ? " checked" : "") + "> " + esc(s) + "</label>";
+      }).join("") : '<span class="muted">No block sections for this subject on the class list yet.</span>') +
+      '</div><div class="muted">Tick none to give the exam to every block section of the subject.</div></div>' +
+      '<div class="wide btnrow">' +
+      '<label class="check"><input type="checkbox" id="f-shq"' + (x.shuffleQ ? " checked" : "") + "> Shuffle question order</label>" +
+      '<label class="check"><input type="checkbox" id="f-shc"' + (x.shuffleC ? " checked" : "") + "> Shuffle choices</label>" +
+      '<label class="check"><input type="checkbox" id="f-copy"' + (x.blockCopy ? " checked" : "") + "> Block copy, paste and right-click</label>" +
+      '<label class="check"><input type="checkbox" id="f-score"' + (x.showScore ? " checked" : "") + "> Show score right after submitting</label></div>" +
+      '<div class="wide btnrow"><button class="btn small ghost" id="open-now">Open now</button><button class="btn small ghost" id="close-now">Close now</button>' +
+      '<span class="muted">Sets the opening or closing time to now. Remember to choose Published and save.</span></div>' +
+      "</div></section>" +
+
+      '<section class="ch paste-box"><h2>📋 Paste questions</h2><p class="lead">Paste multiple-choice and problem-solving questions together or separately, ' +
+      "straight from Word or Google Docs. Click <b>Read questions</b> to check them before adding.</p>" +
+      '<details class="paste-help"><summary><b>How to write the questions (click to open)</b></summary>' +
+      "<p>Number each question. Multiple choice: put the choices on their own lines (A. B. C. D.), then the answer letter. " +
+      "Problem solving: no choices; give the answer (a number, an exact value like 3/8 or pi/4, or a formula like x^2 + C) and the solution. " +
+      "Math can be typed as LaTeX between $ signs, e.g. $\\frac{1}{2}mv^2$.</p>" +
+      "<pre>1. Which planet is closest to the Sun?\nA. Venus\nB. Mercury\nC. Earth\nD. Mars\nAnswer: B\n\n" +
+      "2. A ball is thrown straight up at 20 m/s. How high does it rise? (g = 9.8 m/s²)\nAnswer: 20.4\nPoints: 5\nTolerance: 2%\nSolution:\n" +
+      "At the top v = 0, so $h = \\frac{v_0^2}{2g} = \\frac{20^2}{2(9.8)} = 20.4$ m.</pre>" +
+      "<p>Also understood: choices on one line (<code>A. 2x  B. x²  C. 2</code>), the correct choice marked with * (<code>*B. Mercury</code>), " +
+      "an <b>Answer key</b> section at the end (<code>1. B  2. C  3. A</code>), a <b>Solutions</b> section at the end, and headings such as " +
+      "<code>Part I</code> / <code>Part II</code> where numbering starts again. Points and tolerance lines are optional. " +
+      "In solutions, number steps as <code>Step 1</code> or <code>(1)</code>, not <code>1.</code>, so they are not mistaken for new questions. " +
+      "Several accepted answers: <code>Answer: 0.5 | 1/2</code>.</p></details>" +
+      '<label class="field" style="margin-top:12px">Paste here<textarea id="paste" placeholder="1. Question…&#10;A. …&#10;B. …&#10;Answer: B"></textarea></label>' +
+      '<div class="btnrow" style="align-items:flex-end;margin-top:8px">' +
+      '<label class="field">Points, multiple choice<input type="number" min="0" step="any" id="d-mc" value="1" style="width:120px"></label>' +
+      '<label class="field">Points, problem solving<input type="number" min="0" step="any" id="d-ps" value="5" style="width:120px"></label>' +
+      '<label class="field">Tolerance % (numbers)<input type="number" min="0" step="any" id="d-tol" value="1" style="width:120px"></label>' +
+      '<button class="btn" id="read">Read questions</button></div><div id="parsed"></div></section>' +
+
+      '<section class="ch"><h2>🧾 Questions <span class="muted">(' + x.questions.length + " items · " + total + ' points)</span></h2>' +
+      '<div class="btnrow"><label class="check"><input type="checkbox" id="show-pv"> Show how students will see the math</label>' +
+      '<button class="btn small ghost" id="add-mc">+ Multiple choice</button><button class="btn small ghost" id="add-ps">+ Problem solving</button>' +
+      (x.questions.length ? '<button class="btn small danger" id="clear-q">Remove all questions</button>' : "") + "</div>" +
+      '<div id="qlist">' + x.questions.map(qCard).join("") + "</div>" +
+      (x.questions.length ? "" : '<p class="muted">No questions yet. Paste them above, or add them one by one.</p>') + "</section>" +
+
+      '<div class="sticky-save"><div class="btnrow" style="align-items:center"><button class="btn" id="save">💾 Save exam</button>' +
+      '<button class="btn ghost" id="back">← Back to exams</button><span id="ed-state" class="muted">' + (edDirty ? "Unsaved changes" : x.id ? "Saved" : "Not saved yet") + "</span></div></div>";
+
+    bindEditor();
+    if (parsed) showParsed();
+  }
+
+  function qCard(q, i) {
+    var n = ED.questions.length;
+    var warn = qWarnings(q);
+    var head = '<div class="qe-head"><b>Q' + (i + 1) + "</b>" +
+      '<select data-f="type" data-i="' + i + '"><option value="MC"' + (q.type === "MC" ? " selected" : "") + '>Multiple choice</option><option value="PS"' + (q.type !== "MC" ? " selected" : "") + ">Problem solving</option></select>" +
+      '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-f="points" data-i="' + i + '" value="' + esc(q.points) + '"></label>' +
+      (q.type !== "MC" ? '<label class="check">Tolerance % <input type="number" min="0" step="any" style="width:80px" data-f="tol" data-i="' + i + '" value="' + esc(q.tol) + '"></label>' : "") +
+      '<span style="flex:1"></span><button class="btn small ghost" data-mv="-1" data-i="' + i + '"' + (i ? "" : " disabled") + ">↑</button>" +
+      '<button class="btn small ghost" data-mv="1" data-i="' + i + '"' + (i < n - 1 ? "" : " disabled") + ">↓</button>" +
+      '<button class="btn small danger" data-rm="' + i + '">Delete</button></div>';
+    var body = '<label class="field">Question<textarea data-f="text" data-i="' + i + '">' + esc(q.text) + "</textarea></label>";
+    if (q.type === "MC") {
+      body += '<div class="form-grid"><label class="field wide">Choices (one per line, without A. B. C.)<textarea data-f="choices" data-i="' + i + '">' + esc((q.choices || []).join("\n")) + "</textarea></label>" +
+        '<label class="field">Correct answer<select data-f="answer" data-i="' + i + '">' + (q.choices || []).map(function (c, j) {
+          return "<option" + (letter(j) === q.answer ? " selected" : "") + ">" + letter(j) + "</option>"; }).join("") + "</select></label></div>";
+    } else {
+      body += '<div class="form-grid"><label class="field">Answer<input type="text" data-f="answer" data-i="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. 20.4 or 3/8 or x^2 + C"><span class="muted">Several accepted answers: separate with |</span></label>' +
+        '<label class="field wide">Solution (shown to students after the exam, if allowed)<textarea data-f="solution" data-i="' + i + '">' + esc(q.solution) + "</textarea></label></div>";
+    }
+    return '<div class="qedit' + (warn.length ? " warn" : "") + '" data-card="' + i + '">' + head + body +
+      (warn.length ? '<div class="warnline">⚠️ ' + warn.map(esc).join(" · ") + "</div>" : "") + '<div class="rendered" hidden></div></div>';
+  }
+
+  function qWarnings(q) {
+    var w = [];
+    if (!String(q.text || "").trim()) w.push("No question text");
+    if (q.type === "MC") {
+      if ((q.choices || []).length < 2) w.push("Needs at least 2 choices");
+      else if (!/^[A-H]$/.test(q.answer || "") || (q.answer.charCodeAt(0) - 65) >= q.choices.length) w.push("Choose the correct answer");
+    } else if (!String(q.answer || "").trim()) {
+      w.push("No answer: it cannot be checked automatically (you can still give a final score in Results)");
+    }
+    return w;
+  }
+
+  function renderPreview(card, q) {
+    var box = card.querySelector(".rendered");
+    var on = document.getElementById("show-pv").checked;
+    box.hidden = !on;
+    if (!on) return;
+    var html = esc(q.text);
+    if (q.type === "MC") html += "<ol type=\"A\">" + (q.choices || []).map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
+    else html += "\n\n<b>Answer:</b> " + esc(q.answer) + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
+    box.innerHTML = html;
+    typeset(box);
+  }
+
+  function readForm() {
+    var x = ED, g = function (id) { return document.getElementById(id); };
+    x.subject = g("f-subject").value.trim();
+    x.title = g("f-title").value.trim();
+    x.opensText = g("f-opens").value;
+    x.closesText = g("f-closes").value;
+    x.limit = Number(g("f-limit").value);
+    x.maxLeave = Number(g("f-leave").value) || 0;
+    x.showSolutions = g("f-sol").value;
+    x.status = g("f-status").value;
+    x.instructions = g("f-instr").value;
+    x.sections = [].slice.call(document.querySelectorAll("#f-secs input:checked")).map(function (c) { return c.value; });
+    x.shuffleQ = g("f-shq").checked; x.shuffleC = g("f-shc").checked; x.blockCopy = g("f-copy").checked; x.showScore = g("f-score").checked;
+  }
+
+  function bindEditor() {
+    var g = function (id) { return document.getElementById(id); };
+    var sec = view.querySelectorAll("section.ch")[0];
+    sec.addEventListener("input", markDirty);
+    sec.addEventListener("change", markDirty);
+    g("f-subject").addEventListener("change", function () { readForm(); editor(); });
+    g("open-now").onclick = function () { g("f-opens").value = nowLocal(); markDirty(); };
+    g("close-now").onclick = function () { g("f-closes").value = nowLocal(); markDirty(); };
+    g("read").onclick = function () {
+      var text = g("paste").value;
+      if (!text.trim()) return toast("Paste your questions first.", true);
+      parsed = parsePaste(text, { mc: Number(g("d-mc").value) || 0, ps: Number(g("d-ps").value) || 0, tol: Number(g("d-tol").value) || 0 });
+      showParsed();
+    };
+    g("add-mc").onclick = function () { readForm(); ED.questions.push({ type: "MC", text: "", choices: ["", "", "", ""], answer: "A", points: 1, tol: "", solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
+    g("add-ps").onclick = function () { readForm(); ED.questions.push({ type: "PS", text: "", choices: [], answer: "", points: 5, tol: 1, solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
+    if (g("clear-q")) g("clear-q").onclick = function () { if (!confirm("Remove all " + ED.questions.length + " questions from this exam? (Nothing is saved until you click Save exam.)")) return; readForm(); ED.questions = []; markDirty(); editor(); };
+    g("show-pv").onchange = function () { view.querySelectorAll("[data-card]").forEach(function (c) { renderPreview(c, ED.questions[c.dataset.card]); }); };
+    var pvTimer;
+    g("qlist").addEventListener("input", function (e) {
+      var t = e.target, i = Number(t.dataset.i), q = ED.questions[i], f = t.dataset.f;
+      if (!q || !f) return;
+      if (f === "choices") {
+        q.choices = t.value.split("\n").map(function (s) { return s.trim(); }).filter(String);
+        var sel = t.closest(".qedit").querySelector('select[data-f="answer"]');
+        var keep = q.answer;
+        sel.innerHTML = q.choices.map(function (c, j) { return "<option" + (letter(j) === keep ? " selected" : "") + ">" + letter(j) + "</option>"; }).join("");
+        q.answer = sel.value;
+      } else if (f === "points" || f === "tol") q[f] = t.value === "" ? "" : Number(t.value);
+      else if (f !== "type") q[f] = t.value;
+      markDirty();
+      clearTimeout(pvTimer);
+      var card = t.closest(".qedit");
+      pvTimer = setTimeout(function () { renderPreview(card, q); }, 400);
+    });
+    g("qlist").addEventListener("change", function (e) {
+      var t = e.target, i = Number(t.dataset.i), q = ED.questions[i];
+      if (!q) return;
+      if (t.dataset.f === "type") {
+        readForm();
+        q.type = t.value;
+        if (q.type === "MC") { if (!q.choices || q.choices.length < 2) q.choices = ["", "", "", ""]; q.answer = /^[A-H]$/.test(q.answer) ? q.answer : "A"; }
+        else { q.answer = /^[A-H]$/.test(q.answer || "") ? "" : q.answer; if (q.tol === "" || q.tol == null) q.tol = 1; }
+        markDirty(); editor(); scrollToCard(i);
+      } else if (t.dataset.f === "answer" && q.type === "MC") { q.answer = t.value; markDirty(); }
+    });
+    g("qlist").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      var i = Number(b.dataset.i);
+      if (b.dataset.mv) { readForm(); var j = i + Number(b.dataset.mv); var t = ED.questions[i]; ED.questions[i] = ED.questions[j]; ED.questions[j] = t; markDirty(); editor(); scrollToCard(j); }
+      if (b.dataset.rm !== undefined) { if (!confirm("Delete question " + (Number(b.dataset.rm) + 1) + "?")) return; readForm(); ED.questions.splice(Number(b.dataset.rm), 1); markDirty(); editor(); }
+    });
+    g("save").onclick = function () { saveExam(g("save")); };
+    g("back").onclick = function () {
+      if (edDirty && !confirm("Leave without saving your changes?")) return;
+      ED = null; edDirty = false; parsed = null; exams();
+    };
+  }
+
+  function scrollToCard(i) {
+    var c = view.querySelector('[data-card="' + i + '"]');
+    if (c) c.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  function saveExam(btn) {
+    readForm();
+    var bad = ED.questions.map(function (q, i) {
+      var w = qWarnings(q).filter(function (m) { return !/^No answer/.test(m); });
+      return w.length ? "Q" + (i + 1) + ": " + w.join(", ") : "";
+    }).filter(String);
+    if (bad.length) return toast("Fix these first: " + bad.join("; "), true);
+    if (ED.status === "Published" && !ED.questions.length) return toast("Add questions before publishing.", true);
+    busy(btn, true);
+    call("admin_saveExam", ED).then(function (x) {
+      ED = x; edDirty = false;
+      return reload().then(function () { editor(); toast(x.status === "Published" ? "Saved. Students see this exam " + (x.opens > Date.now() ? "from " + when(x.opens) : "now") + "." : "Saved as a draft."); });
+    }).catch(function (e) { busy(btn, false); toast(e.message, true); });
+  }
+
+  function showParsed() {
+    var box = document.getElementById("parsed");
+    if (!box) return;
+    var p = parsed;
+    var mc = p.items.filter(function (q) { return q.type === "MC"; }).length;
+    var warnCount = p.items.filter(function (q) { return qWarnings(q).length; }).length;
+    box.innerHTML = '<div class="status show ' + (p.items.length ? (warnCount ? "info" : "ok") : "err") + '">' +
+      (p.items.length ? "Found <b>" + p.items.length + "</b> questions: " + mc + " multiple choice, " + (p.items.length - mc) + " problem solving." +
+        (warnCount ? " " + warnCount + " need attention (marked below); you can fix them after adding." : " Everything looks complete.") :
+        "No numbered questions were found. Start each question with its number, like <b>1.</b>") +
+      (p.warnings.length ? '<ul style="margin:6px 0 0">' + p.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul>" : "") + "</div>" +
+      (p.items.length ? '<div class="btnrow" style="margin:10px 0"><button class="btn" id="p-add">Add these to the exam</button>' +
+        (ED.questions.length ? '<button class="btn ghost" id="p-replace">Replace all ' + ED.questions.length + " current questions</button>" : "") +
+        '<button class="btn ghost" id="p-clear">Discard</button></div>' : "") +
+      '<div id="p-list">' + p.items.map(function (q, i) {
+        var w = qWarnings(q);
+        var html = esc(q.text);
+        if (q.type === "MC") html += '<ol type="A">' + q.choices.map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
+        else html += "\n\n<b>Answer:</b> " + esc(q.answer || "—") + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
+        return '<div class="qedit' + (w.length ? " warn" : "") + '"><div class="qe-head"><b>#' + (i + 1) + "</b><span class=\"pill\">" + (q.type === "MC" ? "Multiple choice" : "Problem solving") +
+          "</span><span class=\"muted\">" + q.points + " pt" + (q.points === 1 ? "" : "s") + (q.type === "PS" ? " · tolerance " + q.tol + "%" : "") + "</span></div>" +
+          '<div class="rendered">' + html + "</div>" + (w.length ? '<div class="warnline">⚠️ ' + w.map(esc).join(" · ") + "</div>" : "") + "</div>";
+      }).join("") + "</div>";
+    typeset(box);
+    var add = function (replace) {
+      readForm();
+      var items = p.items.map(function (q) { return { type: q.type, text: q.text, choices: q.choices, answer: q.answer, points: q.points, tol: q.type === "PS" ? q.tol : "", solution: q.solution }; });
+      ED.questions = replace ? items : ED.questions.concat(items);
+      parsed = null; markDirty(); editor();
+      toast(items.length + " questions added. Review them, then click Save exam.");
+      setTimeout(function () { var l = document.getElementById("qlist"); if (l) l.scrollIntoView({ behavior: "smooth" }); }, 50);
+    };
+    if (document.getElementById("p-add")) document.getElementById("p-add").onclick = function () { add(false); };
+    if (document.getElementById("p-replace")) document.getElementById("p-replace").onclick = function () { if (confirm("Replace all current questions with the pasted ones?")) add(true); };
+    if (document.getElementById("p-clear")) document.getElementById("p-clear").onclick = function () { parsed = null; box.innerHTML = ""; };
+  }
+
+  // ---------- reading pasted questions ----------
+  function parsePaste(text, def) {
+    var lines = String(text).replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ").split("\n");
+    var items = [], warnings = [], cur = null, field = "q", mode = "q";
+    var keyBlock = [], solBlock = [], solCur = null, ignored = [];
+    var reQ = /^(?:(?:Q|No\.?|Item|Problem|Question)\s*)?(\d{1,3})(?:[.:]\s+|\)\s*|\s*[.:]$)(.*)$/i;
+    var reChoice = /^(\*?)\s*\(?([A-Ha-h])(?:[.)]\s+|\)\s*)(.*)$/;
+    var reAns = /^(?:answer|ans|correct\s*answer|key)\s*[:=.\-]\s*(.+)$/i;
+    var reSol = /^(?:solution|sol|explanation|solutions?\s*and\s*answers?)\s*[:.\-]?\s*(.*)$/i;
+    var rePts = /^(?:points?|pts)\s*[:=]\s*([\d.]+)\s*(?:pts?|points?)?$/i;
+    var reTol = /^tol(?:erance)?\s*(?:%|\(%\))?\s*[:=]\s*([\d.]+)\s*%?$/i;
+    var reKeyHead = /^(?:answer\s*key|answers|key\s*to\s*corrections?|answer\s*sheet|correct\s*answers)\s*:?$/i;
+    var reSolHead = /^(?:solutions|solution\s*key|worked\s*solutions|solutions\s*and\s*answers)\s*:?$/i;
+    var rePart = /^(?:(?:part|test|section|set)\s+(?:[ivx]+|\d+|[a-h])\b.*|[IVX]{1,5}\.\s+.+)$/i;
+
+    function finish() {
+      if (!cur) return;
+      cur.text = cur.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      cur.solution = cur.sol.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      items.push(cur);
+      cur = null;
+    }
+    function startQ(label, rest) {
+      finish();
+      cur = { label: label, lines: rest ? [rest] : [], choices: [], rawChoices: [], star: "", answer: "", sol: [], points: null, tol: null };
+      field = "q";
+    }
+    function addChoice(l, txt, star, raw) {
+      txt = txt.trim();
+      if (/\(correct\)\s*$|✓\s*$|\*\s*$/i.test(txt)) { star = "*"; txt = txt.replace(/\s*(\(correct\)|✓|\*)\s*$/i, ""); }
+      if (star) cur.star = l.toUpperCase();
+      cur.choices.push(txt);
+      cur.rawChoices.push(raw);
+      field = "choice";
+    }
+
+    lines.forEach(function (raw) {
+      var line = raw.replace(/\t/g, "  ");
+      var t = line.trim();
+      if (reKeyHead.test(t)) { finish(); mode = "key"; return; }
+      if (reSolHead.test(t)) { finish(); mode = "sol"; solCur = null; return; }
+      if (mode === "key") {
+        if (!t) return;
+        var pairs = [], m, re = /(\d{1,3})\s*[.):\-]\s*([A-Ha-h])(?![A-Za-z0-9])/g;
+        while ((m = re.exec(t))) pairs.push([Number(m[1]), m[2].toUpperCase()]);
+        if (pairs.length >= 2 || (pairs.length === 1 && new RegExp("^\\s*\\d{1,3}\\s*[.):\\-]\\s*[A-Ha-h]\\s*$").test(t))) {
+          pairs.forEach(function (p) { keyBlock.push(p); });
+        } else {
+          var one = t.match(/^(\d{1,3})\s*[.):\-]\s*(.+)$/);
+          if (one) keyBlock.push([Number(one[1]), one[2].trim()]);
+          else if (reQ.test(t) || rePart.test(t)) { mode = "q"; } // a new part of questions after the key
+        }
+        if (mode === "key") return;
+      }
+      if (mode === "sol") {
+        var sm = t.match(reQ);
+        if (sm && (!solCur || Number(sm[1]) === solCur[0] + 1)) { solCur = [Number(sm[1]), [sm[2]]]; solBlock.push(solCur); return; }
+        if (solCur) solCur[1].push(line.replace(/\s+$/, ""));
+        return;
+      }
+      if (rePart.test(t) && !(cur && field === "sol")) { finish(); return; }
+      if (cur && reAns.test(t)) { cur.answer = t.match(reAns)[1].trim(); field = "after"; return; }
+      if (cur && reSol.test(t) && !(field === "sol")) { field = "sol"; var rest = t.match(reSol)[1]; if (rest) cur.sol.push(rest); return; }
+      if (cur && rePts.test(t)) { cur.points = Number(t.match(rePts)[1]); return; }
+      if (cur && reTol.test(t)) { cur.tol = Number(t.match(reTol)[1]); return; }
+      var qm = t.match(reQ);
+      if (qm && (!cur || field !== "sol" || Number(qm[1]) === cur.label + 1)) { startQ(Number(qm[1]), qm[2].trim()); return; }
+      var cm = t.match(reChoice);
+      if (cur && field !== "sol" && field !== "after" && cm && cm[2].toUpperCase().charCodeAt(0) - 65 === cur.choices.length) {
+        // several choices on one line: "A. 2x   B. x²   C. 2"
+        var parts = (cm[2].toUpperCase() === "A" ? t : "").split(/\s+(?=\*?\(?[B-Hb-h][.)]\s)/);
+        if (parts.length > 1) {
+          parts.forEach(function (p) { var pm = p.trim().match(reChoice); if (pm) addChoice(pm[2], pm[3], pm[1], p.trim()); });
+        } else addChoice(cm[2], cm[3], cm[1], t);
+        return;
+      }
+      if (!cur) { if (t) ignored.push(t); return; }
+      if (field === "sol" || field === "after") { if (t || cur.sol.length) cur.sol.push(line.replace(/\s+$/, "")); return; }
+      if (field === "choice") {
+        if (!t) { field = "gap"; return; }
+        cur.choices[cur.choices.length - 1] += " " + t;   // a choice that wraps onto the next line
+        cur.rawChoices[cur.rawChoices.length - 1] += " " + t;
+        return;
+      }
+      cur.lines.push(line.replace(/\s+$/, ""));
+    });
+    finish();
+
+    // Answer key and solutions sections: match by question number, in order (numbering may restart in each part)
+    var claim = function (n, test) {
+      for (var i = 0; i < items.length; i++) if (items[i].label === n && test(items[i])) return items[i];
+      return null;
+    };
+    keyBlock.forEach(function (k) {
+      var it = claim(k[0], function (x) { return !x.answer && !x._k; });
+      if (it) { it.answer = k[1]; it._k = 1; } else warnings.push("Answer key item " + k[0] + " does not match a question.");
+    });
+    solBlock.forEach(function (s) {
+      var it = claim(s[0], function (x) { return !x._s; });
+      var body = s[1].join("\n").trim();
+      if (it) { it._s = 1; it.solution = (it.solution ? it.solution + "\n\n" : "") + body; } else warnings.push("Solution " + s[0] + " does not match a question.");
+    });
+    if (ignored.length) warnings.push("Ignored text before the first question: \"" + ignored.slice(0, 2).join(" / ").slice(0, 120) + (ignored.length > 2 ? "…" : "") + "\"");
+
+    var out = items.map(function (x) {
+      var ans = String(x.answer || "").trim();
+      var lm = ans.match(/^\(?([A-Ha-h])\)?(?:[.):\s]|$)/);
+      var isMC = x.choices.length >= 2 && (lm || x.star || !ans);
+      if (isMC) {
+        var a = lm ? lm[1].toUpperCase() : x.star;
+        return { type: "MC", text: x.text, choices: x.choices, answer: a || "", points: x.points != null ? x.points : def.mc, tol: "", solution: x.solution };
+      }
+      // Not multiple choice: lettered lines are parts of the problem, e.g. "a) find the speed"
+      var text = x.text + (x.rawChoices.length ? "\n" + x.rawChoices.join("\n") : "");
+      return { type: "PS", text: text.trim(), choices: [], answer: ans.replace(/\s*(?:\(|\[)?(?:final answer)(?:\)|\])?\s*$/i, ""), points: x.points != null ? x.points : def.ps,
+               tol: x.tol != null ? x.tol : def.tol, solution: x.solution };
+    });
+    return { items: out, warnings: warnings };
+  }
+  window.__parsePaste = parsePaste; // for testing
+
+  // =====================================================================
+  // Results
+  // =====================================================================
+  function results() {
+    var opts = A.exams.slice().sort(function (a, b) { return a.subject.localeCompare(b.subject) || (b.opens || 0) - (a.opens || 0); });
+    if (!resExam && opts.length) resExam = (opts.filter(function (x) { return x.state === "open"; })[0] || opts[0]).id;
+    view.innerHTML = '<section class="ch"><h2>📊 Results</h2><div class="btnrow" style="align-items:flex-end">' +
+      '<label class="field" style="min-width:320px">Exam<select id="r-exam">' + opts.map(function (x) {
+        return '<option value="' + esc(x.id) + '"' + (x.id === resExam ? " selected" : "") + ">" + esc(x.subject + " · " + x.title) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field" style="min-width:180px">Block section<select id="r-sec"></select></label>' +
+      '<button class="btn small ghost" id="r-refresh">Refresh</button><label class="check"><input type="checkbox" id="r-auto" checked> Update every 20 s</label>' +
+      '<button class="btn small ghost" id="r-csv">Download CSV</button><button class="btn small ghost" id="r-regrade">Re-grade all</button></div>' +
+      '<div id="r-body"><div class="loading"><div class="spinner"></div>Loading…</div></div></section>';
+    if (!opts.length) { document.getElementById("r-body").innerHTML = '<p class="muted">No exams yet.</p>'; return; }
+    document.getElementById("r-exam").onchange = function () { resExam = this.value; resSection = ""; resOpen = {}; loadResults(); };
+    document.getElementById("r-sec").onchange = function () { resSection = this.value; drawResults(); };
+    document.getElementById("r-refresh").onclick = function () { loadResults(); };
+    document.getElementById("r-auto").onchange = function () { clearTimeout(resTimer); if (this.checked) loadResults(); };
+    document.getElementById("r-csv").onclick = csv;
+    document.getElementById("r-regrade").onclick = function () {
+      var b = this; busy(b, true, "Re-grading…");
+      call("admin_regrade", resExam).then(function (d) { busy(b, false); toast(d.updated ? d.updated + " scores updated in the Attempts sheet." : "All scores were already up to date."); loadResults(); })
+        .catch(function (e) { busy(b, false); toast(e.message, true); });
+    };
+    loadResults();
+  }
+  function loadResults() {
+    clearTimeout(resTimer);
+    var id = resExam;
+    call("admin_results", id).then(function (d) {
+      if (tab !== "results" || id !== resExam) return;
+      var editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#r-body input");
+      resData = d;
+      if (!editing) drawResults();
+      var auto = document.getElementById("r-auto");
+      if (auto && auto.checked) resTimer = setTimeout(loadResults, 20000);
+    }).catch(function (e) { var b = document.getElementById("r-body"); if (b) b.innerHTML = '<p class="status show err">' + esc(e.message) + "</p>"; });
+  }
+  function drawResults() {
+    var d = resData, body = document.getElementById("r-body");
+    if (!d || !body) return;
+    var secs = {};
+    d.rows.forEach(function (r) { secs[r.section] = 1; });
+    document.getElementById("r-sec").innerHTML = '<option value="">All</option>' + Object.keys(secs).sort().map(function (s) {
+      return "<option" + (s === resSection ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("");
+    var rows = d.rows.filter(function (r) { return !resSection || r.section === resSection; });
+    var n = { done: 0, live: 0, none: 0, left: 0 };
+    rows.forEach(function (r) {
+      var a = r.attempt;
+      if (!a) n.none++; else if (a.status === "Submitted") n.done++; else n.live++;
+      if (a && a.left) n.left++;
+    });
+    var x = d.exam;
+    body.innerHTML = '<p class="muted">' + esc(x.subject) + " · " + (x.sections.length ? esc(x.sections.join(", ")) : "all block sections") +
+      " · opens " + when(x.opens) + " · closes " + when(x.closes) + " · " + x.questions.length + " items</p>" +
+      '<div class="grid2" style="margin-bottom:12px"><div class="stat"><div class="l">Submitted</div><div class="v">' + n.done + "</div></div>" +
+      '<div class="stat"><div class="l">Taking it now</div><div class="v">' + n.live + "</div></div>" +
+      '<div class="stat"><div class="l">Not started</div><div class="v">' + n.none + "</div></div>" +
+      '<div class="stat"><div class="l">Left the page</div><div class="v" style="color:var(--no)">' + n.left + '</div><div class="muted">students, at least once</div></div></div>' +
+      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th><th>Status</th><th>Auto score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        var a = r.attempt;
+        var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span><div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
+          : '<span class="pill open">In progress</span>' + (a.awayNow ? ' <span class="pill bad">Away now</span>' : "");
+        var main = "<tr><td>" + esc(r.no) + '</td><td class="wrap">' + esc(r.name) + (r.extra ? ' <span class="pill">not on list</span>' : "") + (r.blocked ? ' <span class="pill bad">blocked</span>' : "") +
+          "</td><td>" + esc(r.section) + "</td><td>" + st + "</td><td>" + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
+          "<td>" + (a ? '<input class="score" data-final="' + esc(a.id) + '" value="' + esc(a.final) + '" placeholder="—">' : "") + "</td>" +
+          "<td>" + (a ? '<input class="remarks" data-remarks="' + esc(a.id) + '" value="' + esc(a.remarks) + '">' : "") + "</td>" +
+          '<td style="' + (a && a.left ? "color:var(--no);font-weight:800" : "") + '">' + (a ? a.left : "") + "</td><td>" + (a && a.away ? dur(a.away) : "") + "</td>" +
+          "<td>" + (a && a.submitted ? when(a.submitted) : "") + "</td><td>" + (a ? '<div class="row-actions"><button class="btn small" data-save="' + esc(a.id) + '">Save</button>' +
+          '<button class="btn small ghost" data-open="' + esc(a.id) + '">' + (resOpen[a.id] ? "Hide" : "Answers") + '</button><button class="btn small danger" data-retake="' + esc(a.id) + '">Retake</button></div>' : "") + "</td></tr>";
+        return main + (a && resOpen[a.id] ? '<tr class="detail"><td colspan="11"><div class="detail-wrap">' + detail(a, x) + "</div></td></tr>" : "");
+      }).join("") + "</tbody></table></div>";
+    body.querySelectorAll("[data-open]").forEach(function (b) { b.onclick = function () { resOpen[b.dataset.open] = !resOpen[b.dataset.open]; drawResults(); }; });
+    body.querySelectorAll("[data-save]").forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.save;
+        var f = body.querySelector('[data-final="' + cssq(id) + '"]').value, rm = body.querySelector('[data-remarks="' + cssq(id) + '"]').value;
+        busy(b, true, "…");
+        call("admin_saveResult", id, f, rm).then(function () {
+          busy(b, false); toast("Saved.");
+          d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { r.attempt.final = f; r.attempt.remarks = rm; } });
+        }).catch(function (e) { busy(b, false); toast(e.message, true); });
+      };
+    });
+    body.querySelectorAll("[data-retake]").forEach(function (b) {
+      b.onclick = function () {
+        if (!confirm("Allow this student to take the exam again from the start? Their current attempt is kept in the Attempts sheet, marked as reset.")) return;
+        busy(b, true, "…");
+        call("admin_allowRetake", b.dataset.retake).then(function () { toast("The student can now retake the exam."); loadResults(); }).catch(function (e) { busy(b, false); toast(e.message, true); });
+      };
+    });
+    typeset(body);
+  }
+  function cssq(s) { return String(s).replace(/(["\\])/g, "\\$1"); }
+  function detail(a, x) {
+    var html = '<div class="grid2" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)"><div>';
+    x.questions.forEach(function (q, i) {
+      var mine = a.answers[q.id], it = a.items[i] || {};
+      html += '<div class="qedit" style="border-color:' + (it.ok ? "var(--ok-bd)" : "var(--no-bd)") + '"><div class="qe-head"><b>Q' + (i + 1) + "</b><span>" + (it.ok ? "✅" : "❌") + " " + (it.got || 0) + " / " + q.points + '</span></div><div class="rendered">' + esc(q.text) + "</div>";
+      if (q.type === "MC") {
+        html += "<p>Answer: <b>" + esc(mine || "(blank)") + (mine ? ". " + esc(q.choices[mine.charCodeAt(0) - 65] || "") : "") + "</b> · Key: <b>" + esc(q.answer) + ". " + esc(q.choices[q.answer.charCodeAt(0) - 65] || "") + "</b></p>";
+      } else {
+        html += "<p>Final answer: <b>" + esc(mine && mine.a || "(blank)") + "</b> · Key: <b>" + esc(String(q.answer).split("|").join(" or ")) + "</b></p>" +
+          (mine && mine.s ? '<div class="muted">Student\'s solution:</div><div class="sol-view">' + esc(mine.s) + "</div>" : '<p class="muted">No solution written.</p>');
+      }
+      html += "</div>";
+    });
+    html += "</div><div><h3>Activity log</h3><p class=\"muted\">Started " + when(a.started) + "<br>Deadline " + when(a.deadline) + "</p><ul class=\"ev-list\">" + (a.events || []).map(function (e) {
+      var bad = /left|tried|blocked|fullscreen/.test(e[1]);
+      return "<li><span class=\"muted\">" + new Date(e[0]).toLocaleTimeString("en-PH", { timeZone: "Asia/Manila" }) + "</span> · <span class=\"" + (bad ? "bad" : "") + "\">" + esc(e[1]) + "</span>" + (e[2] ? " <span class=\"muted\">(" + esc(e[2]) + ")</span>" : "") + "</li>";
+    }).join("") + "</ul></div></div>";
+    return html;
+  }
+  function csv() {
+    var d = resData;
+    if (!d) return;
+    var head = ["Student No.", "Name", "Block and Section", "Email", "Status", "Auto score", "Total", "Final score", "Remarks", "Times left page", "Seconds away", "Started", "Submitted", "How submitted"];
+    d.exam.questions.forEach(function (q, i) { head.push("Q" + (i + 1)); });
+    var rows = [head].concat(d.rows.filter(function (r) { return !resSection || r.section === resSection; }).map(function (r) {
+      var a = r.attempt || {};
+      var row = [r.no, r.name, r.section, r.email, a.status || "Not started", a.score, a.total, a.final, a.remarks, a.left, a.away,
+                 a.started ? new Date(a.started).toLocaleString("en-PH", { timeZone: "Asia/Manila" }) : "", a.submitted ? new Date(a.submitted).toLocaleString("en-PH", { timeZone: "Asia/Manila" }) : "", a.how];
+      d.exam.questions.forEach(function (q, i) { row.push(a.items ? (a.items[i] || {}).got : ""); });
+      return row;
+    }));
+    var text = "\ufeff" + rows.map(function (r) { return r.map(function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\r\n");
+    var el = document.createElement("a");
+    el.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+    el.download = (d.exam.subject + " " + d.exam.title).replace(/[^\w-]+/g, "_") + ".csv";
+    el.click();
+  }
+
+  // =====================================================================
+  // Class list (from the record book)
+  // =====================================================================
+  function roster() {
+    view.innerHTML = '<section class="ch"><h2>🧑‍🎓 Class list</h2><p class="lead">Import students from your record book. Each tab is one block section: a tab named like ' +
+      "<code>MMW - CEIT-03-101E</code> gives the subject (MMW) and block section; a tab named like <code>CAL00</code> gives the subject, and its " +
+      "<b>YEAR AND SECTION:</b> cell gives the block section. Student numbers must be in column A; the name is the next filled cell. " +
+      "A student's email is their student number @rtu.edu.ph.</p>" +
+      '<div class="btnrow" style="align-items:flex-end"><label class="field" style="flex:1;min-width:280px">Record book link (Google Sheets)<input type="text" id="b-url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>' +
+      '<button class="btn" id="b-read">Read tabs</button></div><div id="b-out"></div></section>' +
+      '<section class="ch"><h2>Students</h2><div id="ro-body"><div class="loading"><div class="spinner"></div>Loading…</div></div></section>';
+    document.getElementById("b-read").onclick = readBook;
+    call("admin_classList").then(function (d) { rosterData = d; drawRoster(); })
+      .catch(function (e) { document.getElementById("ro-body").innerHTML = '<p class="status show err">' + esc(e.message) + "</p>"; });
+  }
+  function readBook() {
+    var b = document.getElementById("b-read"), url = document.getElementById("b-url").value.trim();
+    if (!url) return toast("Paste the record book link first.", true);
+    busy(b, true, "Reading…");
+    call("admin_readBook", url).then(function (d) { busy(b, false); book = { url: url, title: d.title, tabs: d.tabs }; drawBook(); })
+      .catch(function (e) { busy(b, false); toast(e.message, true); });
+  }
+  function drawBook() {
+    var out = document.getElementById("b-out");
+    out.innerHTML = "<h3>" + esc(book.title) + '</h3><p class="muted">Tick the tabs to import. Check the subject and block section of each; edit them if needed. ' +
+      "Importing replaces the students of those subject + block sections and keeps everything else.</p>" +
+      '<div class="tw"><table class="data"><thead><tr><th></th><th>Tab</th><th>Subject</th><th>Block and section</th><th>Students</th><th>First names</th></tr></thead><tbody>' +
+      book.tabs.map(function (t, i) {
+        return '<tr><td><input type="checkbox" data-pick="' + i + '" checked></td><td>' + esc(t.tab) + '</td><td><input type="text" data-subj="' + i + '" value="' + esc(t.subject) + '"></td>' +
+          '<td><input type="text" data-sec="' + i + '" value="' + esc(t.section) + '"></td><td>' + t.count + '</td><td class="wrap muted">' + esc(t.sample.join("; ")) + "</td></tr>";
+      }).join("") + '</tbody></table></div><div class="btnrow" style="margin-top:10px"><button class="btn" id="b-import">Import ticked tabs</button></div>';
+    document.getElementById("b-import").onclick = function () {
+      var picks = book.tabs.map(function (t, i) {
+        return { tab: t.tab, on: out.querySelector('[data-pick="' + i + '"]').checked, subject: out.querySelector('[data-subj="' + i + '"]').value.trim(), section: out.querySelector('[data-sec="' + i + '"]').value.trim() };
+      }).filter(function (p) { return p.on; });
+      var bad = picks.filter(function (p) { return !p.subject || !p.section; });
+      if (!picks.length) return toast("Tick at least one tab.", true);
+      if (bad.length) return toast("Fill in the subject and block section of: " + bad.map(function (p) { return p.tab; }).join(", "), true);
+      var b = this; busy(b, true, "Importing…");
+      call("admin_importBook", book.url, picks).then(function (d) {
+        rosterData = d; book = null; out.innerHTML = '<div class="status show ok">Imported ' + d.imported.total + " students from " + d.imported.tabs.length + " tab(s): " +
+          d.imported.tabs.map(function (t) { return esc(t.subject + " · " + t.section) + " (" + t.count + ")"; }).join(", ") + ".</div>";
+        drawRoster();
+        return reload();
+      }).catch(function (e) { busy(b, false); toast(e.message, true); });
+    };
+  }
+  function drawRoster() {
+    var d = rosterData, body = document.getElementById("ro-body");
+    if (!d || !body) return;
+    if (d.books.length && !document.getElementById("b-url").value) document.getElementById("b-url").value = d.books[d.books.length - 1];
+    var subs = {}, secs = {};
+    d.rows.forEach(function (r) { subs[r[2]] = 1; if (!rosterFilter.subject || r[2] === rosterFilter.subject) secs[r[3]] = 1; });
+    var q = rosterFilter.q.toLowerCase();
+    var rows = d.rows.filter(function (r) {
+      return (!rosterFilter.subject || r[2] === rosterFilter.subject) && (!rosterFilter.section || r[3] === rosterFilter.section) &&
+        (!q || (r[0] + " " + r[1]).toLowerCase().indexOf(q) >= 0);
+    });
+    body.innerHTML = '<div class="btnrow" style="align-items:flex-end;margin-bottom:10px">' +
+      '<label class="field">Subject<select id="ro-subj"><option value="">All</option>' + Object.keys(subs).sort().map(function (s) { return "<option" + (s === rosterFilter.subject ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field">Block section<select id="ro-sec"><option value="">All</option>' + Object.keys(secs).sort().map(function (s) { return "<option" + (s === rosterFilter.section ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") + "</select></label>" +
+      '<label class="field" style="min-width:220px">Search<input type="text" id="ro-q" value="' + esc(rosterFilter.q) + '" placeholder="Student number or name"></label></div>' +
+      '<p class="muted">' + rows.length + " of " + d.rows.length + " enrolments shown. Tick <b>Blocked</b> to stop a student from opening that subject's exams.</p>" +
+      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Subject</th><th>Block and section</th><th>Email</th><th>Blocked</th></tr></thead><tbody>' +
+      rows.slice(0, 600).map(function (r) {
+        return "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td><td>" + esc(r[2]) + "</td><td>" + esc(r[3]) + "</td><td>" + esc(r[4]) + "</td>" +
+          '<td><input type="checkbox" data-block="' + esc(r[0]) + '" data-subj="' + esc(r[2]) + '"' + (/^true$/i.test(r[5]) ? " checked" : "") + "></td></tr>";
+      }).join("") + (rows.length > 600 ? '<tr><td colspan="6" class="muted">Showing the first 600. Use the filters to narrow the list.</td></tr>' : "") +
+      (d.rows.length ? "" : '<tr><td colspan="6" class="muted">No students yet. Import them from your record book above.</td></tr>') + "</tbody></table></div>";
+    document.getElementById("ro-subj").onchange = function () { rosterFilter.subject = this.value; rosterFilter.section = ""; drawRoster(); };
+    document.getElementById("ro-sec").onchange = function () { rosterFilter.section = this.value; drawRoster(); };
+    var qi = document.getElementById("ro-q");
+    qi.oninput = function () { rosterFilter.q = this.value; var pos = this.selectionStart; drawRoster(); var n = document.getElementById("ro-q"); n.focus(); n.setSelectionRange(pos, pos); };
+    body.querySelectorAll("[data-block]").forEach(function (c) {
+      c.onchange = function () {
+        var on = c.checked;
+        call("admin_setBlocked", c.dataset.block, c.dataset.subj, on).then(function () {
+          d.rows.forEach(function (r) { if (r[0] === c.dataset.block && r[2] === c.dataset.subj) r[5] = on ? "TRUE" : "FALSE"; });
+          toast(on ? "Blocked." : "Unblocked.");
+        }).catch(function (e) { c.checked = !on; toast(e.message, true); });
+      };
+    });
+  }
+
+  // =====================================================================
+  // Settings
+  // =====================================================================
+  function settings() {
+    var s = A.settings;
+    view.innerHTML = '<section class="ch"><h2>⚙️ Settings</h2><div class="form-grid">' +
+      '<label class="field wide">Web app address (ends in /exec)<input type="text" id="s-url" value="' + esc(s.studentUrl || "") + '" placeholder="https://script.google.com/a/macros/rtu.edu.ph/s/…/exec">' +
+      '<span class="muted">Apps Script editor: Deploy > Manage deployments > copy the Web app URL.</span></label>' +
+      '<label class="field">Site title<input type="text" id="s-title" value="' + esc(s.siteTitle || "") + '"></label>' +
+      '<label class="field">Instructor (shown to students who are not on the class list)<input type="text" id="s-inst" value="' + esc(s.instructor || "") + '"></label>' +
+      '</div><div class="btnrow" style="margin-top:12px"><button class="btn" id="s-save">Save settings</button></div>' +
+      "<h3>Links</h3><p>Student link (GitHub Pages, opens the web app): <a target=\"_blank\" rel=\"noopener\" href=\"" + esc(A.pagesUrl) + '">' + esc(A.pagesUrl) + "</a><br>" +
+      'Google Sheet with all the data: <a target="_blank" rel="noopener" href="' + esc(A.sheetUrl) + '">open</a></p>' +
+      '<p class="muted">Who can open this admin site is set in Code.gs (CONFIG.ADMIN_EMAILS). Students are recognised by their student-number email (@rtu.edu.ph).</p></section>';
+    document.getElementById("s-save").onclick = function () {
+      var b = this; busy(b, true);
+      call("admin_saveSettings", { studentUrl: document.getElementById("s-url").value.trim(), siteTitle: document.getElementById("s-title").value.trim(),
+        instructor: document.getElementById("s-inst").value.trim() }).then(function (d) { A = d; busy(b, false); toast("Settings saved."); })
+        .catch(function (e) { busy(b, false); toast(e.message, true); });
+    };
+  }
+
+  function reload() { return call("admin_load").then(function (d) { A = d; }); }
+
+  reload().then(render).catch(function (e) {
+    view.innerHTML = '<section class="ch"><h2>Could not load</h2><p>' + esc(e.message) + "</p><p class=\"muted\">If this is the first time, run <b>setup</b> from the Apps Script editor.</p></section>";
+  });
+})();
+</script>
+</body>

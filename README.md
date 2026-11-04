@@ -1,54 +1,99 @@
-# Online exam with tab-switch detection (Google Apps Script)
+# RTU Online Exams
 
-Students open one link and are identified by their Google account. Only **@rtu.edu.ph** accounts on your student list, in an open block section, can take the exam. You control everything from a Google Sheet.
+Online exams for all subjects (PHYMECH, CAL00, CAL01, CAL02, MMW, …) with tab-switch detection, run as one Google Apps
+Script web app open only to **@rtu.edu.ph** accounts.
 
-## Important: use your @rtu.edu.ph account
-Do every step below while signed in to your **@rtu.edu.ph** Google account. This is required for two reasons:
-- the "Anyone within Rizal Technological University" access option only exists for school accounts;
-- Google only tells the script who the student is when the script's owner and the student are in the same school domain.
+- **Student link:** https://mrvitalez.github.io/Online-Exam/ forwards students to the web app. Students are recognised
+  by their Google account (`<student number>@rtu.edu.ph`) and see only the exams of the subjects and block sections
+  they are enrolled in.
+- **Admin site:** the web app link followed by `?page=admin`. Only the accounts in `CONFIG.ADMIN_EMAILS` (in `Code.gs`)
+  can open it.
 
-If you set this up with a personal Gmail account, the email check cannot work.
+## What the admin site does
 
-## Setup (about 10 minutes, one time)
-1. Create a new Google Sheet, for example "Science Exam".
-2. Open **Extensions > Apps Script**.
-3. In `Code.gs`, delete what's there and paste the contents of **Code.gs** from this folder.
-4. Click **+** next to Files, choose **HTML**, and name it `Index` (exactly). Paste the contents of **Index.html**. Click **Save**.
-5. In the toolbar's function menu, pick **setup**, then click **Run**. Google asks for permission: choose **Review permissions**, pick your RTU account, then click **Allow**.
-6. Go back to the Sheet. It now has Settings, Questions, Sections, Students, Results and Log tabs with examples, plus an **Exam** menu.
-7. In Apps Script, click **Deploy > New deployment**, click the gear icon, choose **Web app**, and set:
-   - Execute as: **Me**
-   - Who has access: **Anyone within Rizal Technological University**
-
-   Click **Deploy** and copy the web app URL. This is the link you give students. You can also find it later under **Exam > Show the exam link**.
-8. Do a test run: add your own email and a classmate's or co-teacher's to **Students** in an open section, and try the exam.
-
-## Day-to-day use (no code needed)
-| To change… | Edit this sheet |
+| Tab | What you do there |
 |---|---|
-| Title, time limit, auto-submit rule, copy/paste blocking, shuffling, showing scores | **Settings** (column B) |
-| The questions | **Questions**: Type, Question, Points, Correct answer (a letter A–F, or accepted short answers separated by `\|`), Choices A–F |
-| Block sections, and opening or closing the exam per section | **Sections** (tick **Open**) |
-| Who can take the exam | **Students**: Email, Full name, Section; tick **Blocked** to stop a student |
+| 📋 Overview | See what is open now and how many students are taking an exam |
+| 📝 Exams | Create an exam per subject. **Paste** multiple-choice and problem-solving questions, answers and solutions straight from Word or Google Docs, check the preview, then save. Set the opening and closing times, time limit, block sections, auto-submit rule, shuffling, and when solutions are shown. |
+| 📊 Results | Every enrolled student's status, auto score, tab-switch count and time away (updates every 20 s). Open a student to see each answer, their written solutions and the activity log. Give a final score and remarks, allow a retake, re-grade after fixing a key, download CSV. |
+| 🧑‍🎓 Class list | Paste your **record book** link, choose the tabs, import. Tab `MMW - CEIT-03-101E` gives subject MMW and that block section; a tab like `CAL00` gives the subject, and its `YEAR AND SECTION:` cell gives the block section. Student numbers in column A, the name in the next filled cell. Tick **Blocked** to stop a student. |
+| ⚙️ Settings | The web app address, site title, instructor name |
 
-- Changes apply right away, and you don't need to redeploy.
-- **Results** and **Log** update about once a minute. Use **Exam > Update results now** to update immediately.
-- **Exam > Allow retake for selected students** lets a student start over. Select their rows in Results or Students first.
-- **Exam > Archive and clear all results** goes between exams. It keeps a copy of the results, then resets everyone.
-- Fixing a wrong answer key re-grades everyone at the next results update.
-- Don't edit or delete the **ID** column in Questions.
+### Pasting questions
 
-## If you change Code.gs or Index.html later
-Go to **Deploy > Manage deployments**, click the pencil icon, set Version to **New version**, then click **Deploy**. The link stays the same.
+```
+1. Which planet is closest to the Sun?
+A. Venus
+B. Mercury
+C. Earth
+D. Mars
+Answer: B
 
-## Tips for students
-- Use a computer with Chrome and stay signed in to only the RTU account. A private/incognito window with just the RTU account avoids Google's "multiple accounts" errors.
-- Answers save automatically every 20 seconds and whenever the student leaves the page.
+2. A ball is thrown straight up at 20 m/s. How high does it rise? (g = 9.8 m/s²)
+Answer: 20.4
+Points: 5
+Tolerance: 2%
+Solution:
+At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
+```
 
-## Limits to know
-- Detection records that a student left the exam page (another tab, window or app). It cannot see what they looked at, or a phone or other device.
-- Fullscreen probably won't work inside Google's frame. The exam carries on without it.
-- Before the first real exam, run a trial with a full class at the same time to be sure everything holds up.
+- A question with choices and a letter answer is **multiple choice**. Without choices it is **problem solving**: the
+  student types a final answer (checked automatically: a number within the tolerance, an exact value like `3/8` or
+  `pi/4`, or a formula like `x^2 + C`; units are ignored) and writes a solution with a math toolbar.
+- Also understood: choices on one line (`A. 2x  B. x²  C. 2`), the correct choice marked with `*`, an **Answer key**
+  section at the end (`1. B  2. C  3. A`), a **Solutions** section at the end, and `Part I` / `Part II` headings where
+  numbering starts again. Several accepted answers: `Answer: 0.5 | 1/2`.
+- Number the steps of a solution as `Step 1` or `(1)`, not `1.`, so they are not read as new questions.
+- Math is LaTeX between `$ … $` and is shown rendered to students.
 
-## `test/` folder
-This is a local test kit used during development. Don't paste it into Apps Script.
+### Tab-switch detection
+Switching tabs, minimising, clicking into another window or app, leaving fullscreen (when the browser allows
+fullscreen inside Google's frame), and copy/paste/right-click attempts are recorded with times. After the number of
+departures you set, the exam is submitted automatically. The timer keeps running if a student closes the page, and
+unfinished exams are submitted when time runs out. Detection cannot see a phone or another device.
+
+## Setup or upgrade (about 10 minutes)
+
+Do this while signed in to your **@rtu.edu.ph** account. If your email is not `rmvitalez@rtu.edu.ph`, change
+`CONFIG.ADMIN_EMAILS` at the top of `Code.gs` first.
+
+**Upgrading the first version (keeps your exam link):** open the same Google Sheet, then **Extensions > Apps Script**.
+**New project:** create a Google Sheet, then **Extensions > Apps Script**.
+
+1. Make these files in the Apps Script editor and paste the contents of the files in `apps-script/` (names must match):
+   - `Code.gs`, plus a new script file `MathExpr` (**+ > Script**)
+   - HTML files `Student`, `Admin` and `Styles` (**+ > HTML**)
+   - When upgrading, delete the old `Index` file.
+2. Click **Save**. Choose **setup** in the function list, then click **Run**. Allow the permissions it asks for, including
+   opening other spreadsheets (to read your record book). When upgrading, the old tabs are kept as
+   "Settings (old version)" and "Questions (old version)"; you can delete them, and the old Sections, Students, Results
+   and Log tabs, once you no longer need them.
+3. **Deploy:**
+   - Upgrading: **Deploy > Manage deployments > ✏️ > Version: New version > Deploy**. The link does not change.
+   - New project: **Deploy > New deployment > ⚙️ Web app**, Execute as **Me**, Who has access **Anyone within Rizal
+     Technological University**, then **Deploy**. Put the new link in `index.html` (three places).
+4. Open the web app link with `?page=admin` at the end. In **Settings**, paste the web app link (ending in `/exec`).
+5. **Class list:** paste your record book link, click **Read tabs**, check the subjects and block sections, then
+   **Import**.
+6. **Exams:** create an exam, paste the questions, set the times, choose **Published**, then **Save exam**. Try it
+   yourself first: as the instructor you can open every exam, including drafts, from the student link.
+
+After you change the code later, deploy a **New version** again (step 3). Changes made in the admin site apply right
+away and need no deployment.
+
+## Files
+
+```
+index.html                GitHub Pages page that forwards students to the web app
+apps-script/Code.gs       Server code: exams, attempts, grading, class list import, admin functions
+apps-script/MathExpr.gs   Reads and compares math answers (same as in the online modules)
+apps-script/Student.html  Student site: exam list, exam with tab-switch detection, review
+apps-script/Admin.html    Admin site
+apps-script/Styles.html   Maroon and Gold styles (shared with the online modules)
+img/                      Icons and the university seal
+test/                     Local test kit (fake Google services + browser test); not part of the deployment
+```
+
+All data lives in the Google Sheet: **Exams**, **Questions** (answer keys and solutions), **Class List**, **Attempts**
+(one row per student per exam, with answers and the activity log) and **Settings**. Answer keys are never in this
+repository.

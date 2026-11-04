@@ -1,0 +1,416 @@
+<body>
+<div class="banner">📝 <b>Online Exams</b> &nbsp;—&nbsp; Rizal Technological University<span>&nbsp;·&nbsp; sign in with your @rtu.edu.ph account</span></div>
+<header class="hero" id="hero"><div class="inner">
+  <img class="logo" id="logo" alt="">
+  <div class="txt">
+    <span class="eyebrow" id="eyebrow">Online Exams</span>
+    <h1 id="hello">Online Exams</h1>
+    <p id="lead"></p>
+    <div class="hchips" id="chips"></div>
+  </div>
+</div></header>
+<div class="examtop" id="examtop" hidden><div class="in">
+  <div><div class="t" id="et-title"></div><div class="s" id="et-who"></div></div>
+  <div><div class="timer" id="timer">--:--</div><div class="leftbadge" id="leftbadge"></div></div>
+</div></div>
+<main id="view"><div class="loading"><div class="spinner"></div>Loading…</div></main>
+<div class="overlay" id="overlay" hidden><div class="box">
+  <h2 id="ov-title"></h2><p id="ov-text" style="white-space:pre-line"></p>
+  <div class="btnrow" style="justify-content:center"><button class="btn ghost" id="ov-cancel" hidden>Cancel</button><button class="btn" id="ov-ok"></button></div>
+</div></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>window.BOOT = <?!= boot ?>;</script>
+<script>
+window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath: [['\\[', '\\]'], ['$$', '$$']] },
+                   options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'input'] },
+                   startup: { typeset: false } };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"></script>
+<script>
+(function () {
+  "use strict";
+  var BOOT = window.BOOT || {};
+  var $ = function (s) { return document.querySelector(s); };
+  var view = $("#view");
+  var HOME = BOOT.home || null;
+
+  // exam state
+  var exam = null, answers = {}, deadline = 0, clockOffset = 0, departures = 0, dirty = false;
+  var monitoring = false, done = false, away = false, fullscreenWorks = false, timerId = 0, saveId = 0;
+
+  $("#logo").src = BOOT.logo || "";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  // Calls to the server go one at a time and are retried when Google is busy.
+  var chain = Promise.resolve();
+  function call(fn) {
+    var args = [].slice.call(arguments, 1);
+    var p = chain.then(function () { return tryCall(fn, args, 0); });
+    chain = p.catch(function () {});
+    return p;
+  }
+  function tryCall(fn, args, n) {
+    return new Promise(function (resolve, reject) {
+      var r = google.script.run.withSuccessHandler(resolve).withFailureHandler(function (e) {
+        var msg = e && e.message ? e.message : String(e);
+        var transient = /too many|service invoked|timed out|unavailable|network|internal error|try again|NetworkError|Failed to fetch/i.test(msg);
+        if (!transient || n >= 5) return reject(new Error(msg));
+        setTimeout(function () { tryCall(fn, args, n + 1).then(resolve, reject); }, 1000 * Math.pow(2, n) + Math.random() * 800);
+      });
+      r[fn].apply(r, args);
+    });
+  }
+  function typeset(el) {
+    function go() {
+      if (window.MathJax && MathJax.typesetPromise) {
+        if (MathJax.typesetClear) MathJax.typesetClear([el]);
+        return MathJax.typesetPromise([el]).catch(function () {});
+      }
+      setTimeout(go, 300);
+    }
+    go();
+  }
+  var toastTimer;
+  function toast(msg, err) {
+    var t = $("#toast");
+    t.textContent = msg; t.className = "toast" + (err ? " err" : ""); t.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.hidden = true; }, err ? 6000 : 2600);
+  }
+  function overlay(title, text, okText, onOk, cancel) {
+    $("#ov-title").textContent = title; $("#ov-text").textContent = text; $("#ov-ok").textContent = okText;
+    $("#ov-ok").onclick = function () { $("#overlay").hidden = true; if (onOk) onOk(); };
+    $("#ov-cancel").hidden = !cancel;
+    $("#ov-cancel").onclick = function () { $("#overlay").hidden = true; };
+    $("#overlay").hidden = false;
+  }
+  function when(ms) {
+    if (!ms) return "";
+    return new Date(ms).toLocaleString("en-PH", { timeZone: "Asia/Manila", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  function showHero(on) { $("#hero").hidden = !on; $("#examtop").hidden = on; }
+
+  // ---------------- home ----------------
+  function renderHome() {
+    showHero(true);
+    window.scrollTo(0, 0);
+    if (BOOT.error && !HOME) {
+      $("#hello").textContent = "Not available";
+      $("#lead").textContent = "";
+      view.innerHTML = '<section class="ch"><h2>We could not open your exams</h2><p>' + esc(BOOT.error) + '</p>' +
+        '<p class="muted">Signed in as <b>' + esc(BOOT.email) + '</b>.</p></section>';
+      return;
+    }
+    var h = HOME;
+    var first = String(h.name || "").split(",")[1];
+    var given = (first ? first.trim().split(" ")[0] : h.name || "student").toLowerCase().replace(/(^|[\s-])\S/g, function (c) { return c.toUpperCase(); });
+    $("#hello").textContent = "Hi, " + given + "!";
+    $("#lead").textContent = "Your exams are listed below. Each one opens and closes on schedule.";
+    $("#chips").innerHTML = '<span class="who">' + esc(h.email) + "</span>" + h.enrollments.map(function (e) {
+      return "<span>" + esc(e.subject) + " · " + esc(e.section) + "</span>";
+    }).join("") + (h.admin ? '<span>Instructor preview</span>' : "");
+    var groups = { open: [], upcoming: [], done: [], closed: [], draft: [] };
+    h.exams.forEach(function (x) {
+      if (x.attempt && x.attempt.status === "Submitted") groups.done.push(x);
+      else groups[x.state].push(x);
+    });
+    var html = "";
+    function block(title, list) {
+      if (!list.length) return;
+      html += '<h2 class="group">' + title + '</h2><div class="exam-list">' + list.map(card).join("") + "</div>";
+    }
+    block("Open now", groups.open);
+    block("Coming up", groups.upcoming);
+    block("Submitted", groups.done);
+    block("Closed", groups.closed);
+    block("Drafts (only you can see these)", groups.draft);
+    if (!h.exams.length) html = '<section class="ch"><h2>No exams yet</h2><p>There are no exams for your subjects right now. Check again later.</p></section>';
+    view.innerHTML = html;
+    view.querySelectorAll("[data-start]").forEach(function (b) { b.onclick = function () { confirmStart(b.dataset.start); }; });
+    view.querySelectorAll("[data-review]").forEach(function (b) { b.onclick = function () { openReview(b.dataset.review, b); }; });
+    typeset(view);
+  }
+  function card(x) {
+    var a = x.attempt, cls = x.state === "open" && !(a && a.status === "Submitted") ? "open" : a && a.status === "Submitted" ? "done" : "";
+    var lines = [];
+    if (x.opens) lines.push("Opens " + when(x.opens));
+    if (x.closes) lines.push("Closes " + when(x.closes));
+    lines.push(x.count + " question" + (x.count === 1 ? "" : "s") + " · " + x.limit + " minutes");
+    var right = "";
+    if (a && a.status === "Submitted") {
+      right += '<span class="pill done">Submitted</span>';
+      if (x.score !== undefined && x.score !== "") right += ' <b>' + esc(x.final !== "" && x.final != null ? x.final : x.score) + " / " + esc(x.total) + "</b>";
+      if (x.canReview) right += ' <button class="btn small ghost" data-review="' + esc(x.id) + '">Review answers</button>';
+    } else if (x.canStart) {
+      right += '<button class="btn" data-start="' + esc(x.id) + '">' + (a ? "Continue exam" : "Start exam") + "</button>";
+    } else if (x.state === "upcoming") {
+      right += '<span class="pill">Not open yet</span>';
+    } else if (x.state === "closed") {
+      right += '<span class="pill bad">Closed' + (a ? "" : " · not taken") + "</span>";
+    }
+    return '<div class="exam-card ' + cls + '"><div class="info"><span class="subj">' + esc(x.subject) + "</span>" +
+      (x.preview ? ' <span class="pill">Draft preview</span>' : "") +
+      "<h3>" + esc(x.title) + '</h3><div class="meta">' + lines.map(esc).join(" · ") + "</div></div><div>" + right + "</div></div>";
+  }
+  function reloadHome() {
+    view.innerHTML = '<div class="loading"><div class="spinner"></div>Loading…</div>';
+    call("api_home").then(function (h) { HOME = h; BOOT.error = ""; renderHome(); })
+      .catch(function (e) { BOOT.error = e.message; HOME = null; renderHome(); });
+  }
+
+  // ---------------- start ----------------
+  function confirmStart(id) {
+    var x = HOME.exams.filter(function (e) { return e.id === id; })[0];
+    var text = "Time limit: " + x.limit + " minutes. The timer starts now and keeps running even if you close the page.\n\n" +
+      "Stay on this page until you submit. Switching tabs, opening another window or app, or leaving fullscreen is recorded." +
+      (x.maxLeave ? "\nAfter leaving the page " + x.maxLeave + " time" + (x.maxLeave > 1 ? "s" : "") + ", your exam is submitted automatically." : "");
+    overlay(x.title, text, x.attempt ? "Continue exam" : "Start exam", function () { start(id); }, true);
+  }
+  function start(id) {
+    goFullscreen(true);  // must be inside the click
+    view.innerHTML = '<div class="loading"><div class="spinner"></div>Opening the exam…</div>';
+    call("api_start", id).then(function (d) {
+      if (d.done) { toast(d.message); return reloadHome(); }
+      exam = d.exam; answers = d.state.answers || {}; deadline = d.state.deadline; departures = d.state.departures;
+      clockOffset = d.state.serverNow - Date.now(); done = false; away = false; dirty = false;
+      showHero(false);
+      $("#et-title").textContent = exam.subject + " · " + exam.title;
+      $("#et-who").textContent = d.student.name + (d.student.no && d.student.no !== "PREVIEW" ? " · " + d.student.no : "") + " · " + d.student.section;
+      renderExam();
+      updateBadge();
+      clearInterval(timerId); timerId = setInterval(tick, 500); tick();
+      clearInterval(saveId); saveId = setInterval(autosave, 20000);
+      monitoring = true;
+      if (document.hidden || !document.hasFocus()) leave("not focused when the exam started");
+    }).catch(function (e) { toast(e.message, true); reloadHome(); });
+  }
+
+  // ---------------- exam ----------------
+  var SYMS = [["×", "×"], ["÷", "÷"], ["±", "±"], ["√", "√"], ["π", "π"], ["θ", "θ"], ["°", "°"], ["≤", "≤"], ["≥", "≥"],
+              ["≠", "≠"], ["≈", "≈"], ["∞", "∞"], ["Δ", "Δ"], ["μ", "μ"], ["²", "²"], ["³", "³"]];
+  var TEX = [["a/b", "\\frac{a}{b}"], ["xⁿ", "x^{n}"], ["xₙ", "x_{n}"], ["√x", "\\sqrt{x}"], ["∫", "\\int_{a}^{b}"], ["Σ", "\\sum_{i=1}^{n}"],
+             ["v⃗", "\\vec{v}"], ["·", "\\cdot"], ["θ", "\\theta"], ["Δ", "\\Delta"]];
+  function renderExam() {
+    var html = '<section class="ch"><h2>Instructions</h2><p style="white-space:pre-wrap;margin:0">' + esc(exam.instructions || "Answer all questions.") + "</p>" +
+      '<p class="muted" style="margin:.6em 0 0">Leaving this page is recorded.' + (exam.maxLeave ? " After " + exam.maxLeave + " time" + (exam.maxLeave > 1 ? "s" : "") + ", your exam is submitted automatically." : "") +
+      " Your answers save automatically. In solutions, type math between $ signs (for example $x^2$) or use the buttons.</p></section>";
+    exam.questions.forEach(function (q, i) {
+      html += '<section class="ch q-card" data-q="' + esc(q.id) + '"><div class="qhead"><span>Question ' + (i + 1) + " of " + exam.questions.length +
+        "</span><span>" + q.points + " point" + (q.points === 1 ? "" : "s") + '</span></div><div class="qtext">' + esc(q.text) + "</div>";
+      if (q.type === "MC") {
+        html += '<div class="choices">' + q.choices.map(function (c, j) {
+          var on = answers[q.id] === c.l;
+          return '<label class="' + (on ? "sel" : "") + '"><input type="radio" name="' + esc(q.id) + '" value="' + c.l + '"' + (on ? " checked" : "") +
+            "><span><b>" + String.fromCharCode(65 + j) + ".</b> " + esc(c.t) + "</span></label>";
+        }).join("") + "</div>";
+      } else {
+        var a = answers[q.id] || {};
+        html += '<div class="final-label">Final answer</div><div class="answer-row"><input type="text" data-final="' + esc(q.id) + '" maxlength="200" autocomplete="off" spellcheck="false" value="' + esc(a.a || "") + '" placeholder="e.g. 20.4 or 3/8 or pi/4"><span class="muted">Numbers only, or an exact value. Units are optional.</span></div>' +
+          '<div class="solution-box"><span class="sol-label">Solution <span class="req">(show your work)</span></span><div class="toolbar">' +
+          '<div class="tb-row"><span class="tb-tag">Symbols</span>' + SYMS.map(function (s) { return '<button type="button" class="sym" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div>" +
+          '<div class="tb-row"><span class="tb-tag">Math</span>' + TEX.map(function (s) { return '<button type="button" class="sym tex" data-latex="1" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div></div>" +
+          '<textarea class="sol-input" data-sol="' + esc(q.id) + '" maxlength="6000" spellcheck="false">' + esc(a.s || "") + "</textarea>" +
+          '<div class="sol-preview-wrap"><div class="muted">Preview</div><div class="sol-preview"></div></div></div>';
+      }
+      html += "</section>";
+    });
+    html += '<section class="ch"><div class="btnrow" style="justify-content:space-between;align-items:center"><span class="muted" id="savestate">Your answers save automatically.</span>' +
+      '<button class="btn" id="submit">Submit exam</button></div></section>';
+    view.innerHTML = html;
+    window.scrollTo(0, 0);
+    $("#submit").onclick = askSubmit;
+    view.querySelectorAll(".solution-box").forEach(function (sb) {
+      var ta = sb.querySelector("textarea");
+      sb.querySelectorAll(".sym").forEach(function (b) {
+        b.addEventListener("mousedown", function (e) { e.preventDefault(); });
+        b.addEventListener("click", function () { insertAtCursor(ta, b.dataset.insert, b.dataset.latex === "1"); });
+      });
+      preview(ta);
+    });
+    typeset(view);
+  }
+  view.addEventListener("input", function (e) {
+    if (!exam || done) return;
+    var t = e.target;
+    if (t.type === "radio") {
+      answers[t.name] = t.value;
+      t.closest(".choices").querySelectorAll("label").forEach(function (l) { l.classList.toggle("sel", l.contains(t)); });
+    } else if (t.dataset.final !== undefined || t.dataset.sol !== undefined) {
+      var id = t.dataset.final || t.dataset.sol;
+      var a = answers[id] = answers[id] || { a: "", s: "" };
+      if (t.dataset.final !== undefined) a.a = t.value; else { a.s = t.value; preview(t); }
+    } else return;
+    dirty = true;
+    $("#savestate").textContent = "Saving soon…";
+  });
+  function insertAtCursor(ta, text, isLatex) {
+    var start = ta.selectionStart, end = ta.selectionEnd, v = ta.value;
+    if (isLatex) {
+      var inside = (v.slice(0, start).match(/\$/g) || []).length % 2 === 1;
+      if (!inside) text = "$" + text + "$";
+    }
+    ta.value = v.slice(0, start) + text + v.slice(end);
+    var caret = start + text.length - (isLatex && text.charAt(text.length - 1) === "$" ? 1 : 0);
+    ta.focus();
+    ta.setSelectionRange(caret, caret);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  var pv = {};
+  function preview(ta) {
+    var box = ta.closest(".solution-box").querySelector(".sol-preview");
+    clearTimeout(pv[ta.dataset.sol]);
+    pv[ta.dataset.sol] = setTimeout(function () { box.textContent = ta.value; typeset(box); }, 300);
+  }
+  function autosave() {
+    if (!dirty || done) return;
+    dirty = false;
+    call("api_save", exam.id, answers).then(function (d) {
+      if (d && d.submitted) return finish({}, "Time is up. Your answers were submitted.");
+      var s = $("#savestate"); if (s) s.textContent = "All answers saved.";
+    }).catch(function () { dirty = true; var s = $("#savestate"); if (s) s.textContent = "Not saved yet. Check your internet."; });
+  }
+  function tick() {
+    var left = Math.max(0, deadline - (Date.now() + clockOffset));
+    $("#timer").textContent = Math.floor(left / 60000) + ":" + String(Math.floor(left / 1000) % 60).padStart(2, "0");
+    $("#timer").classList.toggle("low", left < 60000);
+    if (left <= 0 && !done) submit("time");
+  }
+  function updateBadge() {
+    $("#leftbadge").textContent = departures ? "Left page: " + departures + (exam.maxLeave ? " / " + exam.maxLeave : "") : "";
+  }
+  function askSubmit() {
+    var n = exam.questions.filter(function (q) {
+      var a = answers[q.id];
+      return q.type === "MC" ? !a : !(a && String(a.a || "").trim());
+    }).length;
+    overlay("Submit exam?", (n ? "You have " + n + " unanswered question" + (n > 1 ? "s" : "") + ". " : "") +
+      "You cannot change your answers after submitting.", "Submit", function () { submit("student"); }, true);
+  }
+  function submit(reason) {
+    if (done) return;
+    done = true;
+    var b = $("#submit"); if (b) { b.disabled = true; b.textContent = "Submitting…"; }
+    call("api_submit", exam.id, answers, reason).then(function (d) {
+      finish(d, reason === "time" ? "Time is up. Your answers were submitted." : "Your answers were submitted.");
+    }).catch(function (e) {
+      done = false; if (b) { b.disabled = false; b.textContent = "Submit exam"; }
+      toast("Could not submit: " + e.message + " Try again.", true);
+    });
+  }
+  function finish(d, msg) {
+    done = true; monitoring = false;
+    clearInterval(timerId); clearInterval(saveId);
+    if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
+    $("#overlay").hidden = true;
+    showHero(true);
+    $("#hello").textContent = "Exam submitted";
+    $("#lead").textContent = exam ? exam.subject + " · " + exam.title : "";
+    var id = exam && exam.id;
+    view.innerHTML = '<section class="ch" style="text-align:center"><h2>✅ ' + esc(msg) + "</h2>" +
+      (d && d.score !== undefined ? '<p style="font-size:1.4rem;font-weight:850">Score: ' + esc(d.score) + " / " + esc(d.total) + "</p>" : "") +
+      "<p>You may now close this page.</p>" +
+      '<div class="btnrow" style="justify-content:center">' + (d && d.canReview ? '<button class="btn ghost" id="rev">Review answers</button>' : "") +
+      '<button class="btn" id="back">Back to my exams</button></div></section>';
+    $("#back").onclick = reloadHome;
+    if ($("#rev")) $("#rev").onclick = function () { openReview(id); };
+    window.scrollTo(0, 0);
+  }
+
+  // ---------------- detection ----------------
+  function goFullscreen(first) {
+    var el = document.documentElement;
+    if (!el.requestFullscreen || document.fullscreenElement) return;
+    // Google's frame may not allow fullscreen; then the exam carries on without it.
+    el.requestFullscreen().then(function () { fullscreenWorks = true; }).catch(function () { if (first) fullscreenWorks = false; });
+  }
+  function leave(detail) {
+    if (!monitoring || done || away) return;
+    away = true; dirty = false;
+    call("api_event", exam.id, "left", detail, answers).then(function (d) {
+      if (d.departures !== undefined) { departures = d.departures; updateBadge(); }
+      if (d.submitted) finish({}, "You left the exam page " + departures + " times, so your exam was submitted automatically.");
+    }).catch(function () {});
+  }
+  function comeBack() {
+    if (!monitoring || done || !away) return;
+    away = false;
+    call("api_event", exam.id, "returned", "", null).then(function (d) {
+      if (d.departures !== undefined) { departures = d.departures; updateBadge(); }
+      if (d.submitted) return finish({}, d.reason === "time" ? "Time is up. Your answers were submitted." : "You left the exam page " + departures + " times, so your exam was submitted automatically.");
+      var left = d.max - departures;
+      overlay("You left the exam page", "This has been recorded (" + departures + (d.max ? " of " + d.max : "") + ")." +
+        (d.max ? " If you leave " + left + " more time" + (left > 1 ? "s" : "") + ", your exam will be submitted automatically." : " Your instructor will see this."),
+        "Back to the exam", function () { if (fullscreenWorks) goFullscreen(); });
+    }).catch(function () {});
+  }
+  document.addEventListener("visibilitychange", function () { if (document.hidden) leave("switched tab or minimized"); else comeBack(); });
+  window.addEventListener("blur", function () { leave("clicked outside the exam"); });
+  window.addEventListener("focus", function () { if (!document.hidden) comeBack(); });
+  window.addEventListener("pagehide", function () { leave("closed or reloaded the page"); });
+  document.addEventListener("fullscreenchange", function () {
+    if (!monitoring || done || !fullscreenWorks || document.fullscreenElement) return;
+    call("api_event", exam.id, "fullscreen-exit", "", null).catch(function () {});
+    overlay("Fullscreen required", "Leaving fullscreen has been recorded. Return to fullscreen to continue.", "Return to fullscreen", goFullscreen);
+  });
+  ["copy", "cut", "paste", "contextmenu"].forEach(function (ev) {
+    document.addEventListener(ev, function (e) {
+      if (!monitoring || done || !exam.blockCopy) return;
+      e.preventDefault();
+      var type = ev === "contextmenu" ? "right-click" : ev;
+      call("api_event", exam.id, type, "", null).catch(function () {});
+      toast((type === "right-click" ? "Right-click" : type.charAt(0).toUpperCase() + type.slice(1)) + " is disabled during the exam.");
+    });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (!monitoring || done || !exam.blockCopy) return;
+    var k = String(e.key || "").toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && ["p", "s", "u", "f"].indexOf(k) >= 0) {
+      e.preventDefault();
+      call("api_event", exam.id, "shortcut", "Ctrl+" + k.toUpperCase(), null).catch(function () {});
+    }
+  });
+
+  // ---------------- review ----------------
+  function openReview(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = "Opening…"; }
+    call("api_review", id).then(function (r) {
+      showHero(true);
+      $("#hello").textContent = r.title;
+      $("#lead").textContent = r.subject + " · Score: " + (r.final !== "" ? r.final + " / " + r.total + " (final, set by your instructor)" : r.score + " / " + r.total);
+      var html = (r.remarks ? '<div class="notice"><b>Instructor remarks:</b> ' + esc(r.remarks) + "</div>" : "");
+      r.questions.forEach(function (q) {
+        html += '<section class="ch q-card"><div class="qhead"><span>Question ' + q.n + "</span><span>" + q.got + " / " + q.points +
+          " · " + (q.ok ? "✅ correct" : "❌ not correct") + '</span></div><div class="qtext">' + esc(q.text) + "</div>";
+        if (q.type === "MC") {
+          html += '<div class="choices">' + q.choices.map(function (c, j) {
+            var l = String.fromCharCode(65 + j);
+            var cls = l === q.answer ? "key" : l === q.mine ? "wrongpick" : "";
+            return '<label class="' + cls + '"><span><b>' + l + ".</b> " + esc(c) + (l === q.mine ? " <i>(your answer)</i>" : "") + "</span></label>";
+          }).join("") + "</div>";
+        } else {
+          var m = q.mine || {};
+          html += '<div class="mine"><b>Your final answer:</b> ' + esc(m.a || "(blank)") + (m.s ? "\n\n<b>Your solution:</b>\n" + esc(m.s) : "") + "</div>" +
+            '<div class="review-key"><b>Correct answer:</b> ' + esc(String(q.answer).split("|").join(" or ")) + "</div>" +
+            (q.solution ? '<div class="review-sol"><b>Solution:</b>\n' + esc(q.solution) + "</div>" : "");
+        }
+        html += "</section>";
+      });
+      html += '<div class="btnrow"><button class="btn" id="back">Back to my exams</button></div>';
+      view.innerHTML = html;
+      $("#back").onclick = reloadHome;
+      window.scrollTo(0, 0);
+      typeset(view);
+    }).catch(function (e) {
+      if (btn) { btn.disabled = false; btn.textContent = "Review answers"; }
+      toast(e.message, true);
+    });
+  }
+
+  renderHome();
+})();
+</script>
+</body>
