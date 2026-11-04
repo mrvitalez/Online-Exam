@@ -29,10 +29,12 @@ var Q_HEAD = ['Exam ID', 'Question ID', 'No.', 'Type', 'Question', 'Choices', 'A
 var CLASS_HEAD = ['Student No.', 'Name', 'Subject', 'Block and Section', 'Email', 'Blocked'];
 var ATT_HEAD = ['Attempt ID', 'Exam ID', 'Subject', 'Exam', 'Email', 'Student No.', 'Name', 'Block and Section', 'Status',
                 'Started', 'Deadline', 'Submitted', 'How Submitted', 'Score', 'Total', 'Final Score', 'Remarks',
-                'Times Left Page', 'Seconds Away', 'Answers (JSON)', 'Item Results (JSON)', 'Events (JSON)'];
+                'Times Left Page', 'Seconds Away', 'Answers (JSON)', 'Item Results (JSON)', 'Events (JSON)', 'Points Given (JSON)'];
 var AC = { ID: 1, EXAM: 2, SUBJECT: 3, TITLE: 4, EMAIL: 5, NO: 6, NAME: 7, SECTION: 8, STATUS: 9, STARTED: 10,
            DEADLINE: 11, SUBMITTED: 12, HOW: 13, SCORE: 14, TOTAL: 15, FINAL: 16, REMARKS: 17, LEFT: 18, AWAY: 19,
-           ANSWERS: 20, ITEMS: 21, EVENTS: 22 };
+           ANSWERS: 20, ITEMS: 21, EVENTS: 22, MANUAL: 23 };
+// Question types: multiple choice, problem solving (final answer + solution), identification (short answer), essay
+var TYPES = ['MC', 'PS', 'ID', 'ES'];
 var DEFAULT_SETTINGS = [
   ['studentUrl', '', 'Web app address ending in /exec (Deploy > Manage deployments). Used for all links.'],
   ['siteTitle', 'RTU Online Exams', 'Shown at the top of the student site'],
@@ -45,6 +47,8 @@ var GRACE_MS = 30 * 1000;     // submissions accepted this long after the timer 
 var MAX_EVENTS = 60;          // per attempt
 var MAX_FINAL = 200;          // characters in a final answer
 var MAX_SOLUTION = 6000;      // characters in a written solution
+var MAX_ID = 300;             // characters in an identification answer
+var MAX_ESSAY = 8000;         // characters in an essay
 var CACHE_SECONDS = 600;
 
 // ---------------------------------------------------------------------------
@@ -119,7 +123,7 @@ function api_home() {
     };
     if (att && att.status === STATUS_DONE) {
       item.canReview = canReview_(x, now);
-      if (x.showScore || item.canReview) { item.score = att.score; item.total = att.total; item.final = att.final; }
+      if (x.showScore || item.canReview) { item.score = att.score; item.total = att.total; item.final = att.final; item.pending = att.pending; }
     }
     item.canStart = (!att || att.status === STATUS_LIVE) && (st === 'open' || admin);
     list.push(item);
@@ -185,7 +189,7 @@ function api_start(examId) {
       rec[AC.ID - 1] = id; rec[AC.EXAM - 1] = examId; rec[AC.SUBJECT - 1] = exam.subject; rec[AC.TITLE - 1] = exam.title;
       rec[AC.EMAIL - 1] = email; rec[AC.NO - 1] = who.no; rec[AC.NAME - 1] = who.name; rec[AC.SECTION - 1] = who.section;
       rec[AC.STATUS - 1] = STATUS_LIVE; rec[AC.STARTED - 1] = new Date(now); rec[AC.DEADLINE - 1] = new Date(deadline);
-      for (var c = AC.SUBMITTED; c <= AC.EVENTS; c++) rec[c - 1] = '';
+      for (var c = AC.SUBMITTED; c <= AC.MANUAL; c++) rec[c - 1] = '';
       rec[AC.LEFT - 1] = 0; rec[AC.AWAY - 1] = 0; rec[AC.ANSWERS - 1] = '{}';
       sheet_(TABS.ATTEMPTS).appendRow(rec);  // appendRow is atomic, so many students can start at once
       row = findAttemptRow_(id);
@@ -240,7 +244,7 @@ function api_submit(examId, answers, reason) {
   return withLive_(examId, function (live, exam) {
     var g = finalize_(live, exam, cleanAnswers_(answers, exam), reason === 'time' ? 'Time ran out' : 'Submitted by student');
     var out = { submitted: true, canReview: canReview_(exam, Date.now()) };
-    if (exam.showScore) { out.score = g.score; out.total = g.total; }
+    if (exam.showScore) { out.score = g.score; out.total = g.total; out.pending = g.pending; }
     return out;
   });
 }
@@ -259,13 +263,14 @@ function api_review(examId) {
       'Solutions are shown after the exam closes' + (exam.closes ? ' on ' + niceTime_(exam.closes) : '') + '.');
   }
   var answers = parseJson_(r[AC.ANSWERS - 1], {});
-  var g = grade_(exam, answers);
+  var g = grade_(exam, answers, parseJson_(r[AC.MANUAL - 1], {}));
   return {
-    title: exam.title, subject: exam.subject, score: g.score, total: g.total,
+    title: exam.title, subject: exam.subject, score: g.score, total: g.total, pending: g.pending,
     final: r[AC.FINAL - 1] === '' ? '' : r[AC.FINAL - 1], remarks: r[AC.REMARKS - 1],
     questions: exam.questions.map(function (q, i) {
       return { n: i + 1, type: q.type, text: q.text, points: q.points, choices: q.choices, answer: q.answer,
-               solution: q.solution, mine: answers[q.id] === undefined ? null : answers[q.id], ok: g.items[i].ok, got: g.items[i].got };
+               solution: q.solution, mine: answers[q.id] === undefined ? null : answers[q.id], ok: g.items[i].ok, got: g.items[i].got,
+               pending: g.items[i].pending };
     })
   };
 }
@@ -323,7 +328,18 @@ function writeProgress_(live) {
 }
 
 function writeAnswers_(live, answers) {
-  sheet_(TABS.ATTEMPTS).getRange(liveRow_(live), AC.ANSWERS).setValue(JSON.stringify(answers));
+  sheet_(TABS.ATTEMPTS).getRange(liveRow_(live), AC.ANSWERS).setValue(answersJson_(answers));
+}
+
+/** A Google Sheets cell holds at most 50,000 characters. */
+function answersJson_(answers) {
+  var json = JSON.stringify(answers);
+  if (json.length > 49000) throw new Error('Your answers are too long to save. Please shorten your essay or solutions.');
+  return json;
+}
+
+function itemsJson_(g) {
+  return JSON.stringify(g.items.map(function (x) { return [x.id, x.pending ? -1 : x.ok ? 1 : 0, x.got]; }));
 }
 
 function readAnswers_(live) {
@@ -338,8 +354,7 @@ function finalize_(live, exam, answers, reason) {
   sh.getRange(row, AC.STATUS, 1, AC.TOTAL - AC.STATUS + 1).setValues([[STATUS_DONE, new Date(live.started),
     new Date(live.deadline), new Date(), reason, g.score, g.total]]);
   sh.getRange(row, AC.LEFT, 1, AC.EVENTS - AC.LEFT + 1).setValues([[live.departures, Math.round(live.awayMs / 1000),
-    JSON.stringify(answers), JSON.stringify(g.items.map(function (x) { return [x.id, x.ok ? 1 : 0, x.got]; })),
-    JSON.stringify(live.events)]]);
+    answersJson_(answers), itemsJson_(g), JSON.stringify(live.events)]]);
   dropLive_(live.id);
   return g;
 }
@@ -359,11 +374,14 @@ function attemptsOf_(email) {
   var sh = sheet_(TABS.ATTEMPTS);
   var out = {};
   if (sh.getLastRow() < 2) return out;
-  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, AC.FINAL).getValues();
-  rows.forEach(function (r) {
+  var n = sh.getLastRow() - 1;
+  var rows = sh.getRange(2, 1, n, AC.FINAL).getValues();
+  var items = sh.getRange(2, AC.ITEMS, n, 1).getValues();
+  rows.forEach(function (r, i) {
     if (String(r[AC.EMAIL - 1]).toLowerCase() !== email || r[AC.STATUS - 1] === STATUS_RESET) return;
+    var pending = parseJson_(items[i][0], []).filter(function (x) { return x[1] === -1; }).length;
     out[r[AC.EXAM - 1]] = { status: r[AC.STATUS - 1], submitted: r[AC.SUBMITTED - 1] instanceof Date ? r[AC.SUBMITTED - 1].getTime() : 0,
-                            score: r[AC.SCORE - 1], total: r[AC.TOTAL - 1], final: r[AC.FINAL - 1] };
+                            score: r[AC.SCORE - 1], total: r[AC.TOTAL - 1], final: r[AC.FINAL - 1], pending: pending };
   });
   return out;
 }
@@ -389,18 +407,42 @@ function maintenance() {
 // Grading
 // ---------------------------------------------------------------------------
 
-function grade_(exam, answers) {
-  var score = 0, total = 0;
+/**
+ * Scores every question. manual: points the instructor gave per question ({question id: points}); they replace the
+ * automatic score. Essays have no automatic score: until the instructor scores them they count 0 and are "pending".
+ */
+function grade_(exam, answers, manual) {
+  manual = manual || {};
+  var score = 0, total = 0, pending = 0;
   var items = exam.questions.map(function (q) {
-    var a = answers[q.id];
-    var ok = q.type === 'MC'
-      ? typeof a === 'string' && a.toUpperCase() === String(q.answer).toUpperCase()
-      : psCorrect_(a && typeof a === 'object' ? a.a : '', q);
+    var a = answers[q.id], ok;
+    if (q.type === 'MC') ok = typeof a === 'string' && a.toUpperCase() === String(q.answer).toUpperCase();
+    else if (q.type === 'PS') ok = psCorrect_(a && typeof a === 'object' ? a.a : '', q);
+    else if (q.type === 'ID') ok = idCorrect_(typeof a === 'string' ? a : '', q);
+    else ok = null;
+    var given = manual[q.id];
+    var has = given !== undefined && given !== null && given !== '' && isFinite(Number(given));
+    var got = has ? Math.max(0, Math.min(q.points, Number(given))) : ok ? q.points : 0;
+    var isPending = q.type === 'ES' && !has && typeof a === 'string' && a.trim() !== '';
+    if (isPending) pending++;
     total += q.points;
-    if (ok) score += q.points;
-    return { id: q.id, ok: ok, got: ok ? q.points : 0 };
+    score += got;
+    return { id: q.id, ok: q.type === 'ES' ? (has ? got >= q.points : null) : (has ? got >= q.points : ok), got: round_(got),
+             auto: ok, manual: has, pending: isPending };
   });
-  return { score: round_(score), total: round_(total), items: items };
+  return { score: round_(score), total: round_(total), items: items, pending: pending };
+}
+
+/** Identification: compared with each accepted answer, ignoring capitals, accents, extra spaces and punctuation. */
+function idCorrect_(text, q) {
+  var t = normId_(text);
+  if (!t) return false;
+  return String(q.answer).split('|').some(function (k) { k = normId_(k); return k && k === t; });
+}
+
+function normId_(s) {
+  return String(s == null ? '' : s).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9\u00c0-\uffff]+/g, ' ').trim();
 }
 
 /** A problem-solving final answer. The key may list several accepted answers separated by | */
@@ -472,6 +514,8 @@ function cleanAnswers_(raw, exam) {
     if (v === undefined || v === null) return;
     if (q.type === 'MC') {
       if (typeof v === 'string' && /^[A-H]$/.test(v) && letterIndex_(v) < q.choices.length) out[q.id] = v;
+    } else if (q.type === 'ID' || q.type === 'ES') {
+      if (typeof v === 'string' && v !== '') out[q.id] = v.slice(0, q.type === 'ID' ? MAX_ID : MAX_ESSAY);
     } else if (typeof v === 'object') {
       var a = String(v.a == null ? '' : v.a).slice(0, MAX_FINAL), s = String(v.s == null ? '' : v.s).slice(0, MAX_SOLUTION);
       if (a || s) out[q.id] = { a: a, s: s };
@@ -533,7 +577,8 @@ function questions_(examId) {
   var list = rows_(TABS.QUESTIONS, Q_HEAD.length).filter(function (r) { return String(r[0]) === examId; })
     .sort(function (a, b) { return Number(a[2]) - Number(b[2]); })
     .map(function (r) {
-      var q = { id: String(r[1]), type: String(r[3]).trim().toUpperCase() === 'MC' ? 'MC' : 'PS', text: String(r[4]),
+      var t = String(r[3]).trim().toUpperCase();
+      var q = { id: String(r[1]), type: TYPES.indexOf(t) >= 0 ? t : 'PS', text: String(r[4]),
                 answer: String(r[6]).trim(), tol: r[7] === '' ? 0 : Number(r[7]) || 0,
                 points: r[8] === '' ? 1 : Math.max(0, Number(r[8]) || 0), solution: String(r[9] || '') };
       if (q.type === 'MC') { q.choices = String(r[5]).split('\n').filter(function (c) { return c.trim(); }); q.answer = q.answer.toUpperCase(); }
@@ -668,7 +713,7 @@ function admin_saveExam(obj) {
   var maxLeave = Math.max(0, Math.floor(Number(obj.maxLeave) || 0));
   var qs = (obj.questions || []).map(function (q, i) {
     var n = i + 1;
-    var type = q.type === 'MC' ? 'MC' : 'PS';
+    var type = TYPES.indexOf(q.type) >= 0 ? q.type : 'PS';
     var text = String(q.text || '').trim();
     if (!text) throw new Error('Question ' + n + ' has no text.');
     var out = { id: /^[\w-]{4,40}$/.test(q.id || '') ? q.id : newId_('Q'), type: type, text: text.slice(0, 20000),
@@ -684,8 +729,8 @@ function admin_saveExam(obj) {
       out.tol = '';
     } else {
       out.choices = [];
-      out.answer = String(q.answer || '').trim().slice(0, 300);
-      out.tol = q.tol === '' || q.tol == null ? 0 : Math.max(0, Number(q.tol) || 0);
+      out.answer = type === 'ES' ? '' : String(q.answer || '').trim().slice(0, 300);
+      out.tol = type === 'PS' ? (q.tol === '' || q.tol == null ? 0 : Math.max(0, Number(q.tol) || 0)) : '';
     }
     return out;
   });
@@ -787,7 +832,8 @@ function attemptView_(r, exam) {
   var id = r[AC.ID - 1];
   var answers = parseJson_(r[AC.ANSWERS - 1], {});
   var live = r[AC.STATUS - 1] === STATUS_LIVE ? getLive_(id) : null;
-  var g = grade_(exam, answers); // re-graded with the current key, so fixing a key updates everyone
+  var manual = parseJson_(r[AC.MANUAL - 1], {});
+  var g = grade_(exam, answers, manual); // re-graded with the current key, so fixing a key updates everyone
   var ms = function (v) { return v instanceof Date ? v.getTime() : 0; };
   return {
     id: id, no: String(r[AC.NO - 1]), name: r[AC.NAME - 1], section: r[AC.SECTION - 1], status: r[AC.STATUS - 1],
@@ -795,7 +841,7 @@ function attemptView_(r, exam) {
     score: g.score, total: g.total, stored: r[AC.SCORE - 1], final: r[AC.FINAL - 1], remarks: r[AC.REMARKS - 1],
     left: live ? live.departures : Number(r[AC.LEFT - 1]) || 0,
     away: live ? Math.round((live.awayMs + (live.awaySince ? Date.now() - live.awaySince : 0)) / 1000) : Number(r[AC.AWAY - 1]) || 0,
-    awayNow: !!(live && live.awaySince), answers: answers, items: g.items,
+    awayNow: !!(live && live.awaySince), answers: answers, items: g.items, pending: g.pending, manual: manual,
     events: live ? live.events : parseJson_(r[AC.EVENTS - 1], [])
   };
 }
@@ -808,6 +854,38 @@ function admin_saveResult(attemptId, finalScore, remarks) {
   if (f !== '' && !isFinite(Number(f))) throw new Error('The final score must be a number (or blank).');
   sheet_(TABS.ATTEMPTS).getRange(row, AC.FINAL, 1, 2).setValues([[f === '' ? '' : Number(f), clean_(remarks, 500)]]);
   return { ok: true };
+}
+
+/**
+ * Points the instructor gives per question (essays, or to override the automatic score of any question).
+ * scores: {question id: points or "" to go back to the automatic score}.
+ */
+function admin_saveItemScores(attemptId, scores) {
+  requireAdmin_();
+  var sh = sheet_(TABS.ATTEMPTS);
+  var row = findAttemptRow_(attemptId);
+  if (!row) throw new Error('Attempt not found.');
+  var r = sh.getRange(row, 1, 1, ATT_HEAD.length).getValues()[0];
+  var exam = examFull_(r[AC.EXAM - 1]);
+  if (!exam) throw new Error('This exam no longer exists.');
+  var manual = parseJson_(r[AC.MANUAL - 1], {});
+  exam.questions.forEach(function (q, i) {
+    if (!scores || !(q.id in scores)) return;
+    var v = String(scores[q.id] == null ? '' : scores[q.id]).trim();
+    if (v === '') { delete manual[q.id]; return; }
+    var n = Number(v);
+    if (!isFinite(n) || n < 0 || n > q.points) throw new Error('Question ' + (i + 1) + ': points must be from 0 to ' + q.points + '.');
+    manual[q.id] = n;
+  });
+  var g = grade_(exam, parseJson_(r[AC.ANSWERS - 1], {}), manual);
+  if (!sh.getRange(1, AC.MANUAL).getValue()) sh.getRange(1, AC.MANUAL).setValue(ATT_HEAD[AC.MANUAL - 1]);
+  sh.getRange(row, AC.MANUAL).setValue(JSON.stringify(manual));
+  if (r[AC.STATUS - 1] === STATUS_DONE) {
+    sh.getRange(row, AC.SCORE, 1, 2).setValues([[g.score, g.total]]);
+    sh.getRange(row, AC.ITEMS).setValue(itemsJson_(g));
+  }
+  r[AC.MANUAL - 1] = JSON.stringify(manual);
+  return attemptView_(r, exam);
 }
 
 function admin_allowRetake(attemptId) {
@@ -832,10 +910,11 @@ function admin_regrade(examId) {
   var all = sh.getRange(2, 1, last - 1, ATT_HEAD.length).getValues();
   all.forEach(function (r, i) {
     if (r[AC.EXAM - 1] !== examId || r[AC.STATUS - 1] !== STATUS_DONE) return;
-    var g = grade_(exam, parseJson_(r[AC.ANSWERS - 1], {}));
-    if (g.score === r[AC.SCORE - 1] && g.total === r[AC.TOTAL - 1]) return;
+    var g = grade_(exam, parseJson_(r[AC.ANSWERS - 1], {}), parseJson_(r[AC.MANUAL - 1], {}));
+    var items = itemsJson_(g);
+    if (g.score === r[AC.SCORE - 1] && g.total === r[AC.TOTAL - 1] && items === r[AC.ITEMS - 1]) return;
     sh.getRange(i + 2, AC.SCORE, 1, 2).setValues([[g.score, g.total]]);
-    sh.getRange(i + 2, AC.ITEMS).setValue(JSON.stringify(g.items.map(function (x) { return [x.id, x.ok ? 1 : 0, x.got]; })));
+    sh.getRange(i + 2, AC.ITEMS).setValue(items);
     n++;
   });
   return { updated: n };

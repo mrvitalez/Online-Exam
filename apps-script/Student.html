@@ -143,7 +143,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var right = "";
     if (a && a.status === "Submitted") {
       right += '<span class="pill done">Submitted</span>';
-      if (x.score !== undefined && x.score !== "") right += ' <b>' + esc(x.final !== "" && x.final != null ? x.final : x.score) + " / " + esc(x.total) + "</b>";
+      if (x.score !== undefined && x.score !== "") right += ' <b>' + esc(x.final !== "" && x.final != null ? x.final : x.score) + " / " + esc(x.total) + "</b>" +
+        (x.pending && (x.final === "" || x.final == null) ? ' <span class="muted">(essays not checked yet)</span>' : "");
       if (x.canReview) right += ' <button class="btn small ghost" data-review="' + esc(x.id) + '">Review answers</button>';
     } else if (x.canStart) {
       right += '<button class="btn" data-start="' + esc(x.id) + '">' + (a ? "Continue exam" : "Start exam") + "</button>";
@@ -207,6 +208,15 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           return '<label class="' + (on ? "sel" : "") + '"><input type="radio" name="' + esc(q.id) + '" value="' + c.l + '"' + (on ? " checked" : "") +
             "><span><b>" + String.fromCharCode(65 + j) + ".</b> " + esc(c.t) + "</span></label>";
         }).join("") + "</div>";
+      } else if (q.type === "ID") {
+        html += '<div class="final-label">Your answer</div><div class="answer-row"><input type="text" data-idans="' + esc(q.id) + '" maxlength="300" autocomplete="off" spellcheck="false" value="' +
+          esc(answers[q.id] || "") + '" placeholder="Type the word or phrase" style="max-width:480px"></div>';
+      } else if (q.type === "ES") {
+        html += '<div class="solution-box"><span class="sol-label">Your answer <span class="req" data-wc="' + esc(q.id) + '"></span></span><div class="toolbar">' +
+          '<div class="tb-row"><span class="tb-tag">Symbols</span>' + SYMS.map(function (s) { return '<button type="button" class="sym" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div>" +
+          '<div class="tb-row"><span class="tb-tag">Math</span>' + TEX.map(function (s) { return '<button type="button" class="sym tex" data-latex="1" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div></div>" +
+          '<textarea class="sol-input essay" data-essay="' + esc(q.id) + '" maxlength="8000" style="min-height:220px;font-family:inherit;font-size:1rem">' + esc(answers[q.id] || "") + "</textarea>" +
+          '<div class="sol-preview-wrap"><div class="muted">Preview (math shown as it will look)</div><div class="sol-preview"></div></div></div>';
       } else {
         var a = answers[q.id] || {};
         html += '<div class="final-label">Final answer</div><div class="answer-row"><input type="text" data-final="' + esc(q.id) + '" maxlength="200" autocomplete="off" spellcheck="false" value="' + esc(a.a || "") + '" placeholder="e.g. 20.4 or 3/8 or pi/4"><span class="muted">Numbers only, or an exact value. Units are optional.</span></div>' +
@@ -230,6 +240,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         b.addEventListener("click", function () { insertAtCursor(ta, b.dataset.insert, b.dataset.latex === "1"); });
       });
       preview(ta);
+      if (ta.dataset.essay) wordCount(ta);
     });
     typeset(view);
   }
@@ -239,6 +250,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (t.type === "radio") {
       answers[t.name] = t.value;
       t.closest(".choices").querySelectorAll("label").forEach(function (l) { l.classList.toggle("sel", l.contains(t)); });
+    } else if (t.dataset.idans !== undefined) {
+      answers[t.dataset.idans] = t.value;
+    } else if (t.dataset.essay !== undefined) {
+      answers[t.dataset.essay] = t.value;
+      wordCount(t);
+      preview(t);
     } else if (t.dataset.final !== undefined || t.dataset.sol !== undefined) {
       var id = t.dataset.final || t.dataset.sol;
       var a = answers[id] = answers[id] || { a: "", s: "" };
@@ -262,8 +279,14 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   var pv = {};
   function preview(ta) {
     var box = ta.closest(".solution-box").querySelector(".sol-preview");
-    clearTimeout(pv[ta.dataset.sol]);
-    pv[ta.dataset.sol] = setTimeout(function () { box.textContent = ta.value; typeset(box); }, 300);
+    var key = ta.dataset.sol || ta.dataset.essay;
+    clearTimeout(pv[key]);
+    pv[key] = setTimeout(function () { box.textContent = ta.value; typeset(box); }, 300);
+  }
+  function wordCount(ta) {
+    var el = view.querySelector('[data-wc="' + ta.dataset.essay + '"]');
+    var n = (ta.value.trim().match(/\S+/g) || []).length;
+    if (el) el.textContent = "(" + n + " word" + (n === 1 ? "" : "s") + ")";
   }
   function autosave() {
     if (!dirty || done) return;
@@ -285,7 +308,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function askSubmit() {
     var n = exam.questions.filter(function (q) {
       var a = answers[q.id];
-      return q.type === "MC" ? !a : !(a && String(a.a || "").trim());
+      return q.type === "PS" ? !(a && String(a.a || "").trim()) : !(a && String(a).trim());
     }).length;
     overlay("Submit exam?", (n ? "You have " + n + " unanswered question" + (n > 1 ? "s" : "") + ". " : "") +
       "You cannot change your answers after submitting.", "Submit", function () { submit("student"); }, true);
@@ -311,7 +334,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     $("#lead").textContent = exam ? exam.subject + " · " + exam.title : "";
     var id = exam && exam.id;
     view.innerHTML = '<section class="ch" style="text-align:center"><h2>✅ ' + esc(msg) + "</h2>" +
-      (d && d.score !== undefined ? '<p style="font-size:1.4rem;font-weight:850">Score: ' + esc(d.score) + " / " + esc(d.total) + "</p>" : "") +
+      (d && d.score !== undefined ? '<p style="font-size:1.4rem;font-weight:850">Score: ' + esc(d.score) + " / " + esc(d.total) + "</p>" +
+        (d.pending ? '<p class="muted">Your essay answers will be checked by your instructor, so your score may still go up.</p>' : "") : "") +
       "<p>You may now close this page.</p>" +
       '<div class="btnrow" style="justify-content:center">' + (d && d.canReview ? '<button class="btn ghost" id="rev">Review answers</button>' : "") +
       '<button class="btn" id="back">Back to my exams</button></div></section>';
@@ -380,17 +404,25 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     call("api_review", id).then(function (r) {
       showHero(true);
       $("#hello").textContent = r.title;
-      $("#lead").textContent = r.subject + " · Score: " + (r.final !== "" ? r.final + " / " + r.total + " (final, set by your instructor)" : r.score + " / " + r.total);
+      $("#lead").textContent = r.subject + " · Score: " + (r.final !== "" ? r.final + " / " + r.total + " (final, set by your instructor)" :
+        r.score + " / " + r.total + (r.pending ? " (essays not checked yet)" : ""));
       var html = (r.remarks ? '<div class="notice"><b>Instructor remarks:</b> ' + esc(r.remarks) + "</div>" : "");
       r.questions.forEach(function (q) {
-        html += '<section class="ch q-card"><div class="qhead"><span>Question ' + q.n + "</span><span>" + q.got + " / " + q.points +
-          " · " + (q.ok ? "✅ correct" : "❌ not correct") + '</span></div><div class="qtext">' + esc(q.text) + "</div>";
+        var verdict = q.pending ? "⏳ not checked yet" : q.type === "ES" ? "checked" : q.got > 0 && q.got < q.points ? "partly correct" : q.ok ? "✅ correct" : "❌ not correct";
+        html += '<section class="ch q-card"><div class="qhead"><span>Question ' + q.n + "</span><span>" + (q.pending ? "—" : q.got) + " / " + q.points +
+          " · " + verdict + '</span></div><div class="qtext">' + esc(q.text) + "</div>";
         if (q.type === "MC") {
           html += '<div class="choices">' + q.choices.map(function (c, j) {
             var l = String.fromCharCode(65 + j);
             var cls = l === q.answer ? "key" : l === q.mine ? "wrongpick" : "";
             return '<label class="' + cls + '"><span><b>' + l + ".</b> " + esc(c) + (l === q.mine ? " <i>(your answer)</i>" : "") + "</span></label>";
           }).join("") + "</div>";
+        } else if (q.type === "ID") {
+          html += '<div class="mine"><b>Your answer:</b> ' + esc(q.mine || "(blank)") + "</div>" +
+            '<div class="review-key"><b>Accepted answer' + (String(q.answer).indexOf("|") >= 0 ? "s" : "") + ":</b> " + esc(String(q.answer).split("|").map(function (x) { return x.trim(); }).join(", ")) + "</div>";
+        } else if (q.type === "ES") {
+          html += '<div class="mine"><b>Your answer:</b>\n' + esc(q.mine || "(blank)") + "</div>" +
+            (q.solution ? '<div class="review-sol"><b>Guide / model answer:</b>\n' + esc(q.solution) + "</div>" : "");
         } else {
           var m = q.mine || {};
           html += '<div class="mine"><b>Your final answer:</b> ' + esc(m.a || "(blank)") + (m.s ? "\n\n<b>Your solution:</b>\n" + esc(m.s) : "") + "</div>" +

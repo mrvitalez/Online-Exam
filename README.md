@@ -14,8 +14,8 @@ Script web app open only to **@rtu.edu.ph** accounts.
 | Tab | What you do there |
 |---|---|
 | 📋 Overview | See what is open now and how many students are taking an exam |
-| 📝 Exams | Create an exam per subject. **Paste** multiple-choice and problem-solving questions, answers and solutions, or **choose a Word (.docx), PDF or text file** and it is read in for you (Word keeps its automatic numbering and equations; from a PDF, math comes out as plain text); check the preview, then save. Set the opening and closing times, time limit, block sections, auto-submit rule, shuffling, and when solutions are shown. |
-| 📊 Results | Every enrolled student's status, auto score, tab-switch count and time away (updates every 20 s). Open a student to see each answer, their written solutions and the activity log. Give a final score and remarks, allow a retake, re-grade after fixing a key, download CSV. |
+| 📝 Exams | Create an exam per subject. **Paste** multiple-choice, identification, problem-solving and essay questions with their answers and solutions, or **choose a Word (.docx), PDF or text file** and it is read in for you (Word keeps its automatic numbering and equations; from a PDF, math comes out as plain text); check the preview, then save. Set the opening and closing times, time limit, block sections, auto-submit rule, shuffling, and when solutions are shown. |
+| 📊 Results | Every enrolled student's status, score, tab-switch count and time away (updates every 20 s). Open a student to see each answer, their written solutions and essays, and the activity log. **Score essays** and change the points of any question (for example, to accept a misspelled answer). Give a final score and remarks, allow a retake, re-grade after fixing a key, download CSV. |
 | 🧑‍🎓 Class list | Paste your **record book** link, choose the tabs, import. Tab `MMW - CEIT-03-101E` gives subject MMW and that block section; a tab like `CAL00` gives the subject, and its `YEAR AND SECTION:` cell gives the block section. Student numbers in column A, the name in the next filled cell. Tick **Blocked** to stop a student. **Remove** one student, or filter (for example by subject) and remove everyone shown; **Add a student** by hand. |
 | ⚙️ Settings | The web app address, site title, instructor name |
 
@@ -37,16 +37,27 @@ Solution:
 At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
 ```
 
-- A question with choices and a letter answer is **multiple choice**. Without choices it is **problem solving**: the
-  student types a final answer (checked automatically: a number within the tolerance, an exact value like `3/8` or
-  `pi/4`, or a formula like `x^2 + C`; units are ignored) and writes a solution with a math toolbar.
+- Four question types:
+  - **Multiple choice:** choices A–H and a letter answer.
+  - **Identification:** the student types a word or phrase; checked automatically against the accepted answers
+    (capitals, accents, extra spaces and punctuation are ignored; several answers separated by `|`).
+  - **Problem solving:** the student types a final answer (checked automatically: a number within the tolerance, an
+    exact value like `3/8` or `pi/4`, or a formula like `x^2 + C`; units are ignored) and writes a solution with a math
+    toolbar.
+  - **Essay:** the student writes a long answer; you give the points in Results. An optional `Rubric:` / `Guide:` is
+    shown to students with the solutions.
+- The type comes from headings such as `Part II. Identification`, `ESSAY` or `Part IV. Problem solving`, or a
+  `Type: essay` line under a question. Without one, it is guessed: choices → multiple choice; a numeric or formula
+  answer or a solution → problem solving; a word answer → identification; no answer → essay. Check the preview.
+- Points written in a question, like `(5 points)` or `[2 pts]`, are used for that question.
 - Also understood: choices on one line (`A. 2x  B. x²  C. 2`), the correct choice marked with `*`, an **Answer key**
   section at the end (`1. B  2. C  3. A`), a **Solutions** section at the end, and `Part I` / `Part II` headings where
   numbering starts again. Several accepted answers: `Answer: 0.5 | 1/2`.
 - Number the steps of a solution as `Step 1` or `(1)`, not `1.`, so they are not read as new questions.
 - Math is LaTeX between `$ … $` and is shown rendered to students.
-- From a file: Word (.docx), PDF or plain text. Word works best: equations become math. From a PDF the text, numbering
-  and choices are read, but math comes out as plain text (x² may appear as x2), so check the preview; a scanned PDF
+- From a file: Word (.docx), PDF or plain text. Word works best: equations become math. From a PDF, the text is read
+  column by column (two- and three-column layouts), choice grids are put in A–D order, and powers and subscripts are
+  kept (x², H₂O); stacked fractions and other built-up math come out as plain text, so check the preview. A scanned PDF
   (a picture of the page) has no text to read. From Google Docs, use **File > Download > Microsoft Word (.docx)**.
   Pictures are not imported. Files are read in your browser and are not uploaded anywhere.
 

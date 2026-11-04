@@ -85,6 +85,23 @@ Answer key
   const PDF_FILE = require('path').join(__dirname, 'fixture.pdf');
   await pdfPage.pdf({ path: PDF_FILE, format: 'A4', displayHeaderFooter: true, headerTemplate: '<span></span>',
     footerTemplate: '<div style="font-size:10px;width:100%;text-align:center"><span class="pageNumber"></span></div>', margin: { top: '20mm', bottom: '20mm' } });
+  // two columns, a title across both, choice grids, a power, a subscript and Word's math italic letters (𝑥)
+  const q2 = (n, q, a, b, c, d, ans) => `<p>${n}. ${q}</p><table style="width:100%;font:inherit"><tr><td>A. ${a}</td><td>B. ${b}</td></tr><tr><td>C. ${c}</td><td>D. ${d}</td></tr></table><p>Answer: ${ans}</p>`;
+  await pdfPage.setContent(`<div style="font:13px Arial;line-height:1.45"><p style="text-align:center"><b>FINAL EXAMINATION IN GENERAL CHEMISTRY AND PHYSICS FOR ENGINEERS</b></p>
+    <div style="column-count:2;column-gap:40px">
+    ${q2(1, 'What is the chemical formula of water, the most common liquid on the surface of the Earth?', 'H<sub>2</sub>O', 'CO<sub>2</sub>', 'NaCl', 'O<sub>2</sub>', 'A')}
+    ${q2(2, 'If 𝑥 = 4, what is the value of 𝑥<sup>2</sup> + 1 in the expression given in the problem?', '9', '16', '17', '25', 'C')}
+    ${q2(3, 'Which quantity is measured in newtons, the SI unit named after the English physicist?', 'mass', 'force', 'energy', 'power', 'B')}
+    ${q2(4, 'How many protons does a neutral carbon atom have in its nucleus when it is not ionized?', '4', '6', '8', '12', 'B')}
+    ${q2(5, 'Which of the following is a vector quantity that has both a magnitude and a direction?', 'speed', 'time', 'velocity', 'mass', 'C')}
+    ${q2(6, 'What is the acceleration due to gravity near the surface of the Earth, approximately?', '9.8 m/s<sup>2</sup>', '8.9 m/s<sup>2</sup>', '1.6 m/s<sup>2</sup>', '98 m/s<sup>2</sup>', 'A')}
+    </div></div>`);
+  const PDF2 = require('path').join(__dirname, 'fixture-2col.pdf');
+  await pdfPage.pdf({ path: PDF2, format: 'A4', margin: { top: '15mm', bottom: '15mm', left: '15mm', right: '15mm' } });
+  // one column of short questions with 2 x 2 choice grids: must NOT be read as two page columns
+  await pdfPage.setContent(`<div style="font:14px Arial;line-height:1.5;width:420px">${[1, 2, 3, 4].map((n) => `<p>${n}. ${n} + ${n} = ?</p><table style="font:inherit"><tr><td style="width:150px">A. ${2 * n - 1}</td><td>B. ${2 * n}</td></tr><tr><td>C. ${2 * n + 1}</td><td>D. ${2 * n + 2}</td></tr></table><p>Answer: B</p>`).join('')}</div>`);
+  const PDF3 = require('path').join(__dirname, 'fixture-grid.pdf');
+  await pdfPage.pdf({ path: PDF3, format: 'A4' });
   await pdfPage.close();
   const errors = [];
   const open = async (email, admin) => {
@@ -106,6 +123,15 @@ Answer key
   check(P.items[4].solution.includes('Step 2') && P.items[4].points === 5, 'paste: PS solution and points', JSON.stringify(P.items[4].solution));
   check(P.items[5].text.includes('a) list the outcomes') && P.items[5].answer === '1/6 | 0.1667' && P.items[5].tol === 1, 'paste: PS sub-parts stay in the question', JSON.stringify(P.items[5]));
   check(P.warnings.some((w) => /Ignored/.test(w)), 'paste: heading before question 1 reported as ignored', P.warnings.join(' | '));
+  const PT = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 2, ps: 5, es: 10, tol: 1 }),
+    'Part I. Multiple choice\n1. Pick B (3 points)\nA. x   C. z\nB. y   D. w\nAnswer: B\nPart II. Identification\n1. Powerhouse of the cell\nAnswer: Mitochondria | mitochondrion\n2. Year the Philippines declared independence\nAnswer: 1898\n' +
+    'Part III. Essay\n1. Explain why the sky is blue. (10 pts)\nRubric: mentions scattering\n2. Describe a pattern in nature.\nPart IV. Problem solving\n1. 2 + 2?\nAnswer: 4\n\nIDENTIFICATION\n1. Capital of the Philippines\nAnswer: Manila');
+  check(PT.items.map((q) => q.type).join(',') === 'MC,ID,ID,ES,ES,PS,ID', 'paste: types from headings (identification, essay, problem solving)', PT.items.map((q) => q.type).join(','));
+  check(PT.items[0].choices.join('') === 'xyzw' && PT.items[0].points === 3 && PT.items[0].text === 'Pick B', 'paste: grid choices put in A-D order, "(3 points)" read', JSON.stringify(PT.items[0]));
+  check(PT.items[1].answer === 'Mitochondria | mitochondrion' && PT.items[2].answer === '1898' && PT.items[1].points === 2, 'paste: identification answers (a number stays identification under its heading)');
+  check(PT.items[3].solution === 'mentions scattering' && PT.items[3].points === 10 && PT.items[4].points === 10 && PT.items[4].answer === '', 'paste: essay rubric and points');
+  const PU = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }), '1. Who wrote Noli Me Tangere?\nAnswer: Jose Rizal\n2. Discuss the role of mathematics in art.\n3. Solve 2x = 10.\nAnswer: 5');
+  check(PU.items.map((q) => q.type).join(',') === 'ID,ES,PS', 'paste: without headings, the type is guessed from the answer', PU.items.map((q) => q.type).join(','));
   const P2 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1) What is 2+2?\n(a) 3\n(b) 4\nAns: b\n\n2. Velocity after 3 s from rest at 2 m/s²?\nAnswer: 6 m/s\nSolution: v = at\n1. wrong-looking step\n= 6 m/s');
   const P3 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1. Explain your\nsolution clearly. What is 2 + 2?\nAnswer: 4\nSolution - add them\n2. Next?\nAnswer: 1\nSol.\nobvious');
   check(P3.items.length === 2 && P3.items[0].text.includes('solution clearly') && P3.items[0].solution === 'add them' && P3.items[1].solution === 'obvious', 'paste: a sentence starting with "solution" is not a Solution label', JSON.stringify(P3.items.map((q) => [q.text, q.solution])));
@@ -163,10 +189,25 @@ Answer key
     const pdfRes = (await ad.textContent('#parsed')).replace(/\s+/g, ' ');
     check(/Found 3 questions: 2 multiple choice, 1 problem solving/.test(pdfRes) && /Read from a PDF/.test(pdfRes), 'pdf file: questions, choices and answers read', pdfRes.slice(0, 200));
     const pdfText = await ad.inputValue('#paste');
-    check(/x\s?2 when x = 3/.test(pdfText) && /B\. 9/.test(pdfText) && !/^\s*[12]\s*$/m.test(pdfText), 'pdf file: power kept on its line, side-by-side choices, page numbers dropped', JSON.stringify(pdfText.slice(0, 400)));
+    check(/x² when x = 3/.test(pdfText) && /B\. 9/.test(pdfText) && !/^\s*[12]\s*$/m.test(pdfText), 'pdf file: power kept on its line, side-by-side choices, page numbers dropped', JSON.stringify(pdfText.slice(0, 400)));
     const pp = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), pdfText);
     check(pp.items[1].choices.join('|') === '6|9|12|27' && pp.items[2].text.includes('show your solution clearly') && pp.items[2].answer === '60', 'pdf file: wrapped question text joined, answers right', JSON.stringify(pp.items.map((q) => [q.type, q.answer, q.choices.join('|'), q.text])));
     await ad.screenshot({ path: out + '/a-pdf.png', fullPage: true });
+    // two-column PDF
+    await ad.setInputFiles('#file', PDF2); await ad.waitForTimeout(2500);
+    const t2 = await ad.inputValue('#paste');
+    const p2 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), t2);
+    check(p2.items.length === 6 && ['chemical formula', 'If x = 4', 'newtons', 'protons', 'vector', 'gravity'].every((w, i) => p2.items[i].text.includes(w)), 'pdf 2 columns: 6 questions in order', JSON.stringify(t2.slice(0, 700)));
+    check(p2.items[1].text === 'If x = 4, what is the value of x² + 1 in the expression given in the problem?', 'pdf: a line wrapped by the column width is joined', JSON.stringify(p2.items[1].text));
+    check(p2.items.map((q) => q.answer).join('') === 'ACBBCA' && p2.items.every((q) => q.choices.length === 4), 'pdf 2 columns: answers and 4 choices each', JSON.stringify(p2.items.map((q) => [q.answer, q.choices])));
+    check(p2.items[0].choices[0] === 'H₂O' && /x² \+ 1/.test(p2.items[1].text) && /If x = 4/.test(p2.items[1].text) && p2.items[5].choices[0] === '9.8 m/s²', 'pdf: subscripts, powers and math letters', JSON.stringify([p2.items[0].choices, p2.items[1].text, p2.items[5].choices[0]]));
+    check(/2 columns/.test(await ad.textContent('#parsed')), 'pdf: says it read 2 columns');
+    // one column with choice grids
+    await ad.setInputFiles('#file', PDF3); await ad.waitForTimeout(2500);
+    const t3 = await ad.inputValue('#paste');
+    const p3 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), t3);
+    check(p3.items.length === 4 && p3.items.every((q, i) => q.choices.join(',') === [2 * i + 1, 2 * i + 2, 2 * i + 3, 2 * i + 4].join(',') && q.answer === 'B') && !/columns/.test(await ad.textContent('#parsed')),
+      'pdf: choice grids in one column are not read as page columns', JSON.stringify(t3.slice(0, 300)));
   } else console.log('SKIP pdf file test (put pdf.min.js and pdf.worker.min.js from pdfjs-dist@3.11.174 in test/vendor)');
   await ad.click('#back'); await ad.waitForTimeout(200);
 
@@ -255,6 +296,43 @@ Answer key
   await ad.click('#r-body tbody tr:has-text("REYES") [data-retake]'); await ad.waitForTimeout(500);
   const reset = H.ss.getSheetByName('Attempts').data.some((r) => /reset-/.test(r[0]) && r[8] === 'Reset (retake allowed)');
   check(reset, 'retake: attempt marked as reset');
+
+  // ---------- identification and essay: take, check, score ----------
+  const quiz = H.as(H.ADMIN, () => H.ctx.admin_saveExam({ subject: 'MMW', title: 'Quiz 2', status: 'Published', limit: 20, maxLeave: 0, showScore: true,
+    showSolutions: 'After submitting', questions: [
+      { type: 'ID', text: 'Powerhouse of the cell', answer: 'Mitochondria | mitochondrion', points: 2 },
+      { type: 'ID', text: 'Pythagorean ___', answer: 'theorem', points: 1 },
+      { type: 'ES', text: 'Explain why the sky is blue.', points: 10, solution: 'Rayleigh scattering of shorter wavelengths.' }] }));
+  const s5 = await open(juan);
+  await s5.click(`[data-start="${quiz.id}"]`); await s5.click('#ov-ok'); await s5.waitForTimeout(500);
+  const qq = await s5.$$eval('.q-card', (els) => els.map((e) => e.dataset.q));
+  await s5.fill(`[data-idans="${qq[0]}"]`, '  MITOCHONDRIA. ');
+  await s5.fill(`[data-idans="${qq[1]}"]`, 'theory');
+  await s5.fill(`[data-essay="${qq[2]}"]`, 'Air molecules scatter blue light more than red light, so we see blue from every direction.');
+  check(/\(16 words\)/.test(await s5.textContent(`.q-card[data-q="${qq[2]}"]`)), 'essay: word count shown');
+  await s5.screenshot({ path: out + '/s-essay.png', fullPage: true });
+  await s5.click('#submit'); await s5.click('#ov-ok'); await s5.waitForTimeout(600);
+  const done5 = (await s5.textContent('#view')).replace(/\s+/g, ' ');
+  check(/Score: 2 \/ 13/.test(done5) && /essay answers will be checked/.test(done5), 'identification auto-checked (case and dot ignored), essay waits for the instructor', done5);
+  await ad.reload(); await ad.waitForTimeout(400);   // the quiz was created outside the admin page
+  await ad.click('[data-tab=results]'); await ad.waitForTimeout(400);
+  await ad.selectOption('#r-exam', quiz.id); await ad.waitForTimeout(700);
+  check(/1 essay to check/.test(await ad.textContent('#r-body')), 'results: essay to check is flagged');
+  await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300);
+  await ad.fill(`[data-item="${quiz.questions[2].id}"]`, '8');
+  await ad.fill(`[data-item="${quiz.questions[1].id}"]`, '1');   // accept "theory" by hand
+  await ad.click('[data-items]'); await ad.waitForTimeout(600);
+  check(/Score: 11 \/ 13/.test(await ad.textContent('#toast')), 'results: essay points and an override saved', await ad.textContent('#toast'));
+  const row5 = (await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ")')).replace(/\s+/g, ' ');
+  check(/11 \/ 13/.test(row5) && !/to check/.test(row5), 'results: score updated, nothing left to check', row5);
+  await ad.screenshot({ path: out + '/a-essay.png', fullPage: true });
+  const att5 = H.ss.getSheetByName('Attempts').data.find((r) => r[1] === quiz.id);
+  check(att5[13] === 11 && JSON.parse(att5[22])[quiz.questions[2].id] === 8, 'attempts sheet: score and points given saved', JSON.stringify([att5[13], att5[22]]));
+  const s6 = await open(juan);
+  await s6.click(`[data-review="${quiz.id}"]`); await s6.waitForTimeout(500);
+  const rv5 = (await s6.textContent('#view')).replace(/\s+/g, ' ');
+  check(/Rayleigh scattering/.test(rv5) && /Accepted answers: Mitochondria, mitochondrion/.test(rv5) && /8 \/ 10/.test(rv5), 'review: identification, essay points and guide shown', rv5.slice(0, 300));
+  await s6.screenshot({ path: out + '/s-review2.png', fullPage: true });
 
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);

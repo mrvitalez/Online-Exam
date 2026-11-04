@@ -84,6 +84,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   }
   function dur(sec) { sec = Math.round(sec || 0); return sec < 60 ? sec + "s" : Math.floor(sec / 60) + "m " + (sec % 60) + "s"; }
   function letter(i) { return String.fromCharCode(65 + i); }
+  var TYPES = [["MC", "Multiple choice"], ["ID", "Identification"], ["PS", "Problem solving"], ["ES", "Essay"]];
+  function typeName(t) { return (TYPES.filter(function (x) { return x[0] === t; })[0] || ["", "Problem solving"])[1]; }
   function stateLabel(x) {
     return { draft: '<span class="pill">Draft</span>', upcoming: '<span class="pill">Scheduled</span>', open: '<span class="pill open">Open now</span>',
              closed: '<span class="pill bad">Closed</span>' }[x.state] || "";
@@ -249,14 +251,18 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<span class="muted">The file is read into the box below and checked. Word keeps equations best; PDF math comes out as plain text. From Google Docs: File > Download > Microsoft Word (.docx).</span></div>' +
       '<label class="field" style="margin-top:12px">Paste here<textarea id="paste" placeholder="1. Question…&#10;A. …&#10;B. …&#10;Answer: B"></textarea></label>' +
       '<div class="btnrow" style="align-items:flex-end;margin-top:8px">' +
-      '<label class="field">Points, multiple choice<input type="number" min="0" step="any" id="d-mc" value="1" style="width:120px"></label>' +
-      '<label class="field">Points, problem solving<input type="number" min="0" step="any" id="d-ps" value="5" style="width:120px"></label>' +
-      '<label class="field">Tolerance % (numbers)<input type="number" min="0" step="any" id="d-tol" value="1" style="width:120px"></label>' +
+      '<div class="muted" style="flex-basis:100%;font-weight:700">Points when a question does not say (for example "(5 points)"):</div>' +
+      '<label class="field">Multiple choice<input type="number" min="0" step="any" id="d-mc" value="1" style="width:110px"></label>' +
+      '<label class="field">Identification<input type="number" min="0" step="any" id="d-id" value="1" style="width:110px"></label>' +
+      '<label class="field">Problem solving<input type="number" min="0" step="any" id="d-ps" value="5" style="width:110px"></label>' +
+      '<label class="field">Essay<input type="number" min="0" step="any" id="d-es" value="10" style="width:110px"></label>' +
+      '<label class="field">Tolerance % (numbers)<input type="number" min="0" step="any" id="d-tol" value="1" style="width:110px"></label>' +
       '<button class="btn" id="read">Read questions</button></div><div id="parsed"></div></section>' +
 
       '<section class="ch"><h2>🧾 Questions <span class="muted">(' + x.questions.length + " items · " + total + ' points)</span></h2>' +
       '<div class="btnrow"><label class="check"><input type="checkbox" id="show-pv"> Show how students will see the math</label>' +
-      '<button class="btn small ghost" id="add-mc">+ Multiple choice</button><button class="btn small ghost" id="add-ps">+ Problem solving</button>' +
+      '<button class="btn small ghost" id="add-mc">+ Multiple choice</button><button class="btn small ghost" id="add-id">+ Identification</button>' +
+      '<button class="btn small ghost" id="add-ps">+ Problem solving</button><button class="btn small ghost" id="add-es">+ Essay</button>' +
       (x.questions.length ? '<button class="btn small danger" id="clear-q">Remove all questions</button>' : "") + "</div>" +
       '<div id="qlist">' + x.questions.map(qCard).join("") + "</div>" +
       (x.questions.length ? "" : '<p class="muted">No questions yet. Paste them above, or add them one by one.</p>') + "</section>" +
@@ -272,9 +278,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var n = ED.questions.length;
     var warn = qWarnings(q);
     var head = '<div class="qe-head"><b>Q' + (i + 1) + "</b>" +
-      '<select data-f="type" data-i="' + i + '"><option value="MC"' + (q.type === "MC" ? " selected" : "") + '>Multiple choice</option><option value="PS"' + (q.type !== "MC" ? " selected" : "") + ">Problem solving</option></select>" +
+      '<select data-f="type" data-i="' + i + '">' + TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (q.type === t[0] ? " selected" : "") + ">" + t[1] + "</option>"; }).join("") + "</select>" +
       '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-f="points" data-i="' + i + '" value="' + esc(q.points) + '"></label>' +
-      (q.type !== "MC" ? '<label class="check">Tolerance % <input type="number" min="0" step="any" style="width:80px" data-f="tol" data-i="' + i + '" value="' + esc(q.tol) + '"></label>' : "") +
+      (q.type === "PS" ? '<label class="check">Tolerance % <input type="number" min="0" step="any" style="width:80px" data-f="tol" data-i="' + i + '" value="' + esc(q.tol) + '"></label>' : "") +
       '<span style="flex:1"></span><button class="btn small ghost" data-mv="-1" data-i="' + i + '"' + (i ? "" : " disabled") + ">↑</button>" +
       '<button class="btn small ghost" data-mv="1" data-i="' + i + '"' + (i < n - 1 ? "" : " disabled") + ">↓</button>" +
       '<button class="btn small danger" data-rm="' + i + '">Delete</button></div>';
@@ -283,6 +289,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       body += '<div class="form-grid"><label class="field wide">Choices (one per line, without A. B. C.)<textarea data-f="choices" data-i="' + i + '">' + esc((q.choices || []).join("\n")) + "</textarea></label>" +
         '<label class="field">Correct answer<select data-f="answer" data-i="' + i + '">' + (q.choices || []).map(function (c, j) {
           return "<option" + (letter(j) === q.answer ? " selected" : "") + ">" + letter(j) + "</option>"; }).join("") + "</select></label></div>";
+    } else if (q.type === "ID") {
+      body += '<label class="field">Accepted answers<input type="text" data-f="answer" data-i="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. mitochondria | mitochondrion">' +
+        '<span class="muted">Separate several accepted answers with |. Capital letters, accents, extra spaces and punctuation are ignored.</span></label>';
+    } else if (q.type === "ES") {
+      body += '<label class="field">Guide or model answer (optional; shown to students after the exam if solutions are shown)<textarea data-f="solution" data-i="' + i + '">' + esc(q.solution) + "</textarea></label>" +
+        '<p class="muted" style="margin:0">Essays are not checked automatically. You give the points in Results.</p>';
     } else {
       body += '<div class="form-grid"><label class="field">Answer<input type="text" data-f="answer" data-i="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. 20.4 or 3/8 or x^2 + C"><span class="muted">Several accepted answers: separate with |</span></label>' +
         '<label class="field wide">Solution (shown to students after the exam, if allowed)<textarea data-f="solution" data-i="' + i + '">' + esc(q.solution) + "</textarea></label></div>";
@@ -297,8 +309,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (q.type === "MC") {
       if ((q.choices || []).length < 2) w.push("Needs at least 2 choices");
       else if (!/^[A-H]$/.test(q.answer || "") || (q.answer.charCodeAt(0) - 65) >= q.choices.length) w.push("Choose the correct answer");
-    } else if (!String(q.answer || "").trim()) {
-      w.push("No answer: it cannot be checked automatically (you can still give a final score in Results)");
+    } else if (q.type !== "ES" && !String(q.answer || "").trim()) {
+      w.push("No answer: it cannot be checked automatically (you can still give the points in Results)");
     }
     return w;
   }
@@ -310,6 +322,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (!on) return;
     var html = esc(q.text);
     if (q.type === "MC") html += "<ol type=\"A\">" + (q.choices || []).map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
+    else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + esc(q.solution) : "";
     else html += "\n\n<b>Answer:</b> " + esc(q.answer) + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
     box.innerHTML = html;
     typeset(box);
@@ -349,7 +362,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     function readPasted() {
       var text = g("paste").value;
       if (!text.trim()) return toast("Paste your questions first.", true);
-      parsed = parsePaste(text, { mc: Number(g("d-mc").value) || 0, ps: Number(g("d-ps").value) || 0, tol: Number(g("d-tol").value) || 0 });
+      parsed = parsePaste(text, { mc: Number(g("d-mc").value) || 0, id: Number(g("d-id").value) || 0, ps: Number(g("d-ps").value) || 0,
+        es: Number(g("d-es").value) || 0, tol: Number(g("d-tol").value) || 0 });
       if (fileNotes.length) parsed.warnings = fileNotes.concat(parsed.warnings);
       showParsed();
     }
@@ -371,6 +385,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     };
     g("add-mc").onclick = function () { readForm(); ED.questions.push({ type: "MC", text: "", choices: ["", "", "", ""], answer: "A", points: 1, tol: "", solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
     g("add-ps").onclick = function () { readForm(); ED.questions.push({ type: "PS", text: "", choices: [], answer: "", points: 5, tol: 1, solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
+    g("add-id").onclick = function () { readForm(); ED.questions.push({ type: "ID", text: "", choices: [], answer: "", points: 1, tol: "", solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
+    g("add-es").onclick = function () { readForm(); ED.questions.push({ type: "ES", text: "", choices: [], answer: "", points: 10, tol: "", solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
     if (g("clear-q")) g("clear-q").onclick = function () { if (!confirm("Remove all " + ED.questions.length + " questions from this exam? (Nothing is saved until you click Save exam.)")) return; readForm(); ED.questions = []; markDirty(); editor(); };
     g("show-pv").onchange = function () { view.querySelectorAll("[data-card]").forEach(function (c) { renderPreview(c, ED.questions[c.dataset.card]); }); };
     var pvTimer;
@@ -397,7 +413,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         readForm();
         q.type = t.value;
         if (q.type === "MC") { if (!q.choices || q.choices.length < 2) q.choices = ["", "", "", ""]; q.answer = /^[A-H]$/.test(q.answer) ? q.answer : "A"; }
-        else { q.answer = /^[A-H]$/.test(q.answer || "") ? "" : q.answer; if (q.tol === "" || q.tol == null) q.tol = 1; }
+        else { q.answer = /^[A-H]$/.test(q.answer || "") || q.type === "ES" ? "" : q.answer; if (q.type === "PS" && (q.tol === "" || q.tol == null)) q.tol = 1; }
         markDirty(); editor(); scrollToCard(i);
       } else if (t.dataset.f === "answer" && q.type === "MC") { q.answer = t.value; markDirty(); }
     });
@@ -439,10 +455,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var box = document.getElementById("parsed");
     if (!box) return;
     var p = parsed;
-    var mc = p.items.filter(function (q) { return q.type === "MC"; }).length;
+    var counts = TYPES.map(function (t) {
+      var n = p.items.filter(function (q) { return q.type === t[0]; }).length;
+      return n ? n + " " + t[1].toLowerCase() : "";
+    }).filter(String).join(", ");
     var warnCount = p.items.filter(function (q) { return qWarnings(q).length; }).length;
     box.innerHTML = '<div class="status show ' + (p.items.length ? (warnCount ? "info" : "ok") : "err") + '">' +
-      (p.items.length ? "Found <b>" + p.items.length + "</b> questions: " + mc + " multiple choice, " + (p.items.length - mc) + " problem solving." +
+      (p.items.length ? "Found <b>" + p.items.length + "</b> questions: " + counts + "." +
         (warnCount ? " " + warnCount + " need attention (marked below); you can fix them after adding." : " Everything looks complete.") :
         "No numbered questions were found. Start each question with its number, like <b>1.</b>") +
       (p.warnings.length ? '<ul style="margin:6px 0 0">' + p.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul>" : "") + "</div>" +
@@ -453,8 +472,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         var w = qWarnings(q);
         var html = esc(q.text);
         if (q.type === "MC") html += '<ol type="A">' + q.choices.map(function (c, j) { return "<li" + (letter(j) === q.answer ? ' class="key"' : "") + ">" + esc(c) + "</li>"; }).join("") + "</ol>";
+        else if (q.type === "ES") html += q.solution ? "\n\n<b>Guide:</b>\n" + esc(q.solution) : "";
         else html += "\n\n<b>Answer:</b> " + esc(q.answer || "—") + (q.solution ? "\n<b>Solution:</b>\n" + esc(q.solution) : "");
-        return '<div class="qedit' + (w.length ? " warn" : "") + '"><div class="qe-head"><b>#' + (i + 1) + "</b><span class=\"pill\">" + (q.type === "MC" ? "Multiple choice" : "Problem solving") +
+        return '<div class="qedit' + (w.length ? " warn" : "") + '"><div class="qe-head"><b>#' + (i + 1) + "</b><span class=\"pill\">" + typeName(q.type) +
           "</span><span class=\"muted\">" + q.points + " pt" + (q.points === 1 ? "" : "s") + (q.type === "PS" ? " · tolerance " + q.tol + "%" : "") + "</span></div>" +
           '<div class="rendered">' + html + "</div>" + (w.length ? '<div class="warnline">⚠️ ' + w.map(esc).join(" · ") + "</div>" : "") + "</div>";
       }).join("") + "</div>";
@@ -646,54 +666,137 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       for (var i = 1; i <= pdf.numPages; i++) pages.push(pdf.getPage(i).then(function (pg) { return pg.getTextContent(); }));
       return Promise.all(pages);
     }).then(function (contents) {
-      var lines = [], chars = 0;
+      var lines = [], cols = 0;
       contents.forEach(function (tc) {
-        var rows = [];
-        tc.items.forEach(function (it) {
-          if (it.str === undefined || it.str === "") return;
-          var x = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || it.height || 10;
-          // same line if the baselines are close; small raised text (powers like x²) joins the line it sits on
-          var row = rows.filter(function (r) { return Math.abs(r.y - y) < Math.max(r.h, h) * 0.55; })[0];
-          if (!row) rows.push(row = { y: y, h: h, items: [] });
-          else if (h > row.h) { row.h = h; row.y = y; }
-          row.items.push({ x: x, w: it.width || 0, s: it.str, h: h });
+        var items = tc.items.filter(function (it) { return it.str; }).map(function (it) {
+          return { x: it.transform[4], y: it.transform[5], w: it.width || 0, h: Math.abs(it.transform[3]) || it.height || 10, s: plainMath(it.str) };
         });
-        rows.sort(function (a, b) { return b.y - a.y; });
-        var right = 0;
-        rows.forEach(function (r) { r.items.forEach(function (it) { right = Math.max(right, it.x + it.w); }); });
-        var prevY = null, prevH = 0, prevFull = false;
-        var START = /^\s*(\*?\(?[A-Ha-h][.)]\s|\(?\d{1,3}[.):]\s|(answer|ans|solution|sol|explanation|points?|pts|tol(erance)?|key)\s*([:=\-–]|\.?\s*$)|part\s|test\s|[IVX]{1,5}\.\s)/i;
-        rows.forEach(function (r) {
-          r.items.sort(function (a, b) { return a.x - b.x; });
-          var t = "", end = null;
-          r.items.forEach(function (it) {
-            if (end !== null) {
-              var gap = it.x - end;
-              if (gap > it.h * 0.12 && !/\s$/.test(t) && !/^\s/.test(it.s)) t += gap > it.h * 1.5 ? "   " : " ";
-            }
-            t += it.s;
-            end = it.x + it.w;
-          });
-          t = t.replace(/\s+$/, "");
-          if (/^\s*(page\s*)?\d{1,3}(\s*(of|\/)\s*\d{1,3})?\s*$/i.test(t)) return;   // page numbers
-          var gapBefore = prevY !== null && prevY - r.y > Math.max(prevH, r.h) * 1.9;
-          if (gapBefore) lines.push("");  // a gap between paragraphs
-          // a line that reached the right margin was wrapped by the page width: join the next line onto it
-          if (!gapBefore && prevFull && lines.length && lines[lines.length - 1] && !START.test(t)) lines[lines.length - 1] += " " + t.trim();
-          else lines.push(t);
-          var lineEnd = r.items.length ? r.items[r.items.length - 1].x + r.items[r.items.length - 1].w : 0;
-          prevFull = lineEnd > right * 0.85;
-          chars += t.trim().length;
-          prevY = r.y; prevH = r.h;
-        });
-        lines.push("");
+        var page = pdfLines(items, 0);
+        cols = Math.max(cols, page.cols);
+        lines = lines.concat(page.lines, [""]);
       });
-      if (!chars) throw new Error("this PDF has no text that can be selected (it is probably a scanned image). Use the original Word file, or type or paste the questions");
-      return {
-        text: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
-        notes: ["Read from a PDF. Check every question in the preview: math such as powers and fractions comes out as plain text (x² may appear as x2), and pictures are not imported."]
-      };
+      var text = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      if (!text.replace(/\s/g, "")) throw new Error("this PDF has no text that can be selected (it is probably a scanned image). Use the original Word file, or type or paste the questions");
+      var notes = ["Read from a PDF. Check every question in the preview: powers and subscripts are kept (x², H₂O), but stacked fractions and other " +
+        "layouts come out as plain text, and pictures are not imported. A Word file of the same exam keeps the math better."];
+      if (cols > 1) notes.push("This PDF has text in " + cols + " columns; each column was read top to bottom, left column first.");
+      return { text: text, notes: notes };
     });
+  }
+  // Word's math letters (𝑥, 𝑦, 𝜃) are special characters in a PDF: turn them back into ordinary letters and digits
+  function plainMath(s) {
+    return String(s).replace(/[\uD835][\uDC00-\uDFFF]|ℎ/g, function (c) { return c === "ℎ" ? "h" : c.normalize("NFKC"); });
+  }
+  var SUP = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻", "−": "⁻", "n": "ⁿ", "(": "⁽", ")": "⁾", "=": "⁼" };
+  var SUB = { "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉", "+": "₊", "-": "₋", "−": "₋", "(": "₍", ")": "₎", "=": "₌" };
+  function raised(s, map, mark) {
+    var t = s.trim();
+    if (!t) return s;
+    return t.split("").every(function (c) { return map[c]; }) ? t.split("").map(function (c) { return map[c]; }).join("") : mark + "(" + t + ")";
+  }
+  /** Groups text pieces into lines: pieces whose baselines are close share a line (a power sits a little higher). */
+  function pdfRows(items) {
+    var rows = [];
+    items.slice().sort(function (a, b) { return b.h - a.h; }).forEach(function (it) {
+      var row = rows.filter(function (r) { return Math.abs(r.y - it.y) < Math.max(r.h, it.h) * 0.55; })[0];
+      if (!row) rows.push(row = { y: it.y, h: it.h, items: [] });
+      row.items.push(it);
+    });
+    rows.sort(function (a, b) { return b.y - a.y; });
+    rows.forEach(function (r) { r.items.sort(function (a, b) { return a.x - b.x; }); });
+    return rows;
+  }
+  /**
+   * Finds the space between page columns: a vertical band that almost no line crosses, with text on both sides on
+   * many lines. A grid of choices (A. … B. …) inside one column is not a page column: its right side is only short choices.
+   */
+  function gutterOf(rows) {
+    if (rows.length < 6) return null;
+    var minX = Infinity, maxX = -Infinity;
+    rows.forEach(function (r) { r.items.forEach(function (it) { if (it.s.trim()) { minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x + it.w); } }); });
+    var W = maxX - minX;
+    if (!(W > 0)) return null;
+    var best = null;
+    for (var f = 0.22; f <= 0.78; f += 0.01) {
+      var c = minX + W * f, cross = 0, left = 0, right = 0, rightText = 0;
+      rows.forEach(function (r) {
+        var L = false, R = false, X = false, rt = "";
+        r.items.forEach(function (it) {
+          if (!it.s.trim()) return;
+          if (it.x < c - 1 && it.x + it.w > c + 1) X = true;
+          else if (it.x + it.w <= c + 1) L = true;
+          else { R = true; rt += it.s; }
+        });
+        if (X) cross++;
+        else { if (L) left++; if (R) { right++; if (rt.trim().length >= 28 || /^\s*\d{1,3}[.)]\s/.test(rt)) rightText++; } }
+      });
+      var n = rows.length;
+      if (cross <= n * 0.15 && left >= n * 0.3 && right >= n * 0.3 && rightText >= right * 0.25) {
+        var score = Math.min(left, right) - 3 * cross;
+        if (!best || score > best.score || (score === best.score && Math.abs(f - 0.5) < Math.abs(best.f - 0.5))) best = { x: c, score: score, f: f };
+      }
+    }
+    return best ? best.x : null;
+  }
+  /** Lines of one block of the page; columns are read one after the other (up to 3 columns). */
+  function pdfLines(items, depth) {
+    var rows = pdfRows(items);
+    var g = depth < 2 ? gutterOf(rows) : null;
+    if (g === null) return { lines: rowLines(rows), cols: 1 };
+    var out = [], left = [], right = [], cols = 2;
+    var flush = function () {
+      [left, right].forEach(function (side) {
+        if (!side.length) return;
+        var part = pdfLines(side, depth + 1);
+        cols = Math.max(cols, part.cols + 1);
+        out = out.concat(part.lines, [""]);
+      });
+      left = []; right = [];
+    };
+    rows.forEach(function (r) {
+      var crosses = r.items.some(function (it) { return it.s.trim() && it.x < g - 1 && it.x + it.w > g + 1; });
+      if (crosses) { flush(); out = out.concat(rowLines([r])); }   // a title across the whole page
+      else r.items.forEach(function (it) { (it.x + it.w <= g + 1 ? left : right).push(it); });
+    });
+    flush();
+    return { lines: out, cols: Math.min(cols, 3) };
+  }
+  var LINE_START = /^\s*(\*?\(?[A-Ha-h][.)]\s|\(?\d{1,3}[.):]\s|(answer|ans|solution|sol|explanation|rubric|guide|points?|pts|tol(erance)?|key|type)\s*([:=\-–]|\.?\s*$)|part\s|test\s|[IVX]{1,5}\.\s)/i;
+  function rowLines(rows) {
+    var right = 0;
+    rows.forEach(function (r) { r.items.forEach(function (it) { right = Math.max(right, it.x + it.w); }); });
+    var lines = [], prevY = null, prevH = 0, prevEnd = 0;
+    rows.forEach(function (r) {
+      var t = "", end = null;
+      r.items.forEach(function (it) {
+        var s = it.s;
+        if (it.h < r.h * 0.85 && s.trim()) {
+          var off = it.y - r.y;
+          if (off > r.h * 0.18) s = raised(s, SUP, "^");          // power: x²
+          else if (off < -r.h * 0.08) s = raised(s, SUB, "_");    // subscript: H₂O
+        }
+        if (end !== null) {
+          var gap = it.x - end;
+          if (gap > r.h * 0.12 && !/\s$/.test(t) && !/^\s/.test(s)) t += gap > r.h * 1.5 ? "   " : " ";
+        }
+        t += s;
+        end = it.x + it.w;
+      });
+      t = t.replace(/\s+$/, "");
+      if (!t.trim() || /^\s*(page\s*)?\d{1,3}(\s*(of|\/)\s*\d{1,3})?\s*$/i.test(t)) return;   // page numbers
+      var gapBefore = prevY !== null && prevY - r.y > Math.max(prevH, r.h) * 1.9;
+      if (gapBefore) lines.push("");
+      // the line before was wrapped by the column width if this line's first word would not have fitted after it:
+      // then the two belong together
+      var first = r.items[0], word = (t.trim().match(/^\S+/) || [""])[0];
+      var wordW = first && first.s.length ? first.w * Math.min(1, word.length / first.s.length) : 0;
+      var wrapped = prevEnd && prevEnd + r.h * 0.3 + wordW > right - r.h * 0.2;
+      if (!gapBefore && wrapped && lines.length && lines[lines.length - 1] && !LINE_START.test(t)) lines[lines.length - 1] += " " + t.trim();
+      else lines.push(t);
+      prevEnd = end;
+      prevY = r.y; prevH = r.h;
+    });
+    return lines;
   }
 
   // ---------- reading pasted questions ----------
@@ -711,17 +814,42 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var reKeyHead = /^(?:answer\s*key|answers|key\s*to\s*corrections?|answer\s*sheet|correct\s*answers)\s*:?$/i;
     var reSolHead = /^(?:solutions|solution\s*key|worked\s*solutions|solutions\s*and\s*answers)\s*:?$/i;
     var rePart = /^(?:(?:part|test|section|set)\s+(?:[ivx]+|\d+|[a-h])\b.*|[IVX]{1,5}\.\s+.+)$/i;
+    // a heading that is just a question type, e.g. "IDENTIFICATION" or "Essay. Answer in 3 to 5 sentences."
+    var reTypeHead = /^(?:multiple[\s-]*choice|identification|fill[\s-]*in[\s-]*the[\s-]*blanks?|short[\s-]*answer|essay|problem[\s-]*solving|computation)\b[^?]{0,100}$/i;
+    var reType = /^type\s*[:\-–]\s*(.+)$/i;
+    var reRubric = /^(?:rubric|guide|criteria|scoring\s*guide|model\s*answer)\s*(?:[:\-–]\s*(.*)|\.?\s*)$/i;
+    var partType = null;
+    function typeOf(t) {
+      t = String(t);
+      if (/multiple[\s-]*choice/i.test(t)) return "MC";
+      if (/identification|fill[\s-]*in[\s-]*the[\s-]*blank|short[\s-]*answer/i.test(t)) return "ID";
+      if (/essay/i.test(t)) return "ES";
+      if (/problem[\s-]*solving|computation|problem\s*set/i.test(t)) return "PS";
+      return null;
+    }
 
     function finish() {
       if (!cur) return;
+      // choices printed down the columns of a grid arrive out of order: put them back in A, B, C, D order
+      var L = cur.letters;
+      if (L.length > 1 && L.join("") !== L.slice().sort().join("") && L.slice().sort().join("") === "ABCDEFGH".slice(0, L.length)) {
+        var order = L.map(function (l, i) { return i; }).sort(function (a, b) { return L[a] < L[b] ? -1 : 1; });
+        cur.choices = order.map(function (i) { return cur.choices[i]; });
+        cur.rawChoices = order.map(function (i) { return cur.rawChoices[i]; });
+        cur.letters = L.slice().sort();
+      }
       cur.text = cur.lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      // "(5 points)" or "[2 pts]" written in the question
+      var pm = cur.text.match(/\s*[(\[]\s*(\d+(?:\.\d+)?)\s*(?:points?|pts?)\.?\s*[)\]]/i);
+      if (pm) { if (cur.points == null) cur.points = Number(pm[1]); cur.text = cur.text.replace(pm[0], "").trim(); }
       cur.solution = cur.sol.join("\n").replace(/\n{3,}/g, "\n\n").trim();
       items.push(cur);
       cur = null;
     }
     function startQ(label, rest) {
       finish();
-      cur = { label: label, lines: rest ? [rest] : [], choices: [], rawChoices: [], star: "", answer: "", sol: [], points: null, tol: null };
+      cur = { label: label, lines: rest ? [rest] : [], choices: [], rawChoices: [], letters: [], star: "", answer: "", sol: [], points: null, tol: null,
+              partType: partType, typeHint: null, rubric: false };
       field = "q";
     }
     function addChoice(l, txt, star, raw) {
@@ -730,6 +858,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       if (star) cur.star = l.toUpperCase();
       cur.choices.push(txt);
       cur.rawChoices.push(raw);
+      cur.letters.push(l.toUpperCase());
       field = "choice";
     }
 
@@ -757,7 +886,10 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         if (solCur) solCur[1].push(line.replace(/\s+$/, ""));
         return;
       }
-      if (rePart.test(t) && !(cur && field === "sol")) { finish(); return; }
+      if (rePart.test(t) && !(cur && field === "sol")) { finish(); partType = typeOf(t); return; }
+      if (reTypeHead.test(t) && !(cur && field === "sol")) { finish(); partType = typeOf(t); return; }
+      if (cur && reType.test(t)) { cur.typeHint = typeOf(t.match(reType)[1]) || (/^\s*(mc|id|ps|es)\s*$/i.test(t.match(reType)[1]) ? t.match(reType)[1].trim().toUpperCase() : null); return; }
+      if (cur && reRubric.test(t) && field !== "sol") { field = "sol"; cur.rubric = true; var rr = t.match(reRubric)[1]; if (rr) cur.sol.push(rr); return; }
       if (cur && reAns.test(t)) { cur.answer = t.match(reAns)[1].trim(); field = "after"; return; }
       if (cur && reSol.test(t) && !(field === "sol")) { field = "sol"; var rest = t.match(reSol)[1]; if (rest) cur.sol.push(rest); return; }
       if (cur && rePts.test(t)) { cur.points = Number(t.match(rePts)[1]); return; }
@@ -765,10 +897,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       var qm = t.match(reQ);
       if (qm && (!cur || field !== "sol" || Number(qm[1]) === cur.label + 1)) { startQ(Number(qm[1]), qm[2].trim()); return; }
       var cm = t.match(reChoice);
-      if (cur && field !== "sol" && field !== "after" && cm && cm[2].toUpperCase().charCodeAt(0) - 65 === cur.choices.length) {
+      // the next choice letter, or (for choices printed in a grid, e.g. "A … C …" then "B … D …") any letter not used yet
+      var okLetter = cm && cur && (cm[2].toUpperCase().charCodeAt(0) - 65 === cur.choices.length ||
+        (cur.choices.length > 0 && cur.letters.indexOf(cm[2].toUpperCase()) < 0 && /[.)]\s/.test(t.slice(0, 5)) && /\s[A-Ha-h][.)]\s/.test(t)));
+      if (cur && field !== "sol" && field !== "after" && okLetter) {
         // several choices on one line: "A. 2x   B. x²   C. 2"
-        var parts = (cm[2].toUpperCase() === "A" ? t : "").split(/\s+(?=\*?\(?[B-Hb-h][.)]\s)/);
-        if (parts.length > 1) {
+        var parts = t.split(/\s+(?=\*?\(?[A-Ha-h][.)]\s)/);
+        if (parts.length > 1 && parts.every(function (p) { return reChoice.test(p.trim()); })) {
           parts.forEach(function (p) { var pm = p.trim().match(reChoice); if (pm) addChoice(pm[2], pm[3], pm[1], p.trim()); });
         } else addChoice(cm[2], cm[3], cm[1], t);
         return;
@@ -804,14 +939,23 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var out = items.map(function (x) {
       var ans = String(x.answer || "").trim();
       var lm = ans.match(/^\(?([A-Ha-h])\)?(?:[.):\s]|$)/);
-      var isMC = x.choices.length >= 2 && (lm || x.star || !ans);
-      if (isMC) {
+      var type = x.typeHint || x.partType || (x.rubric ? "ES" : null);
+      var pts = function (t) { return x.points != null ? x.points : def[t.toLowerCase()] != null ? def[t.toLowerCase()] : 1; };
+      if (type === "MC" || (!type && x.choices.length >= 2 && (lm || x.star || !ans))) {
         var a = lm ? lm[1].toUpperCase() : x.star;
-        return { type: "MC", text: x.text, choices: x.choices, answer: a || "", points: x.points != null ? x.points : def.mc, tol: "", solution: x.solution };
+        return { type: "MC", text: x.text, choices: x.choices, answer: a || "", points: pts("MC"), tol: "", solution: x.solution };
       }
-      // Not multiple choice: lettered lines are parts of the problem, e.g. "a) find the speed"
-      var text = x.text + (x.rawChoices.length ? "\n" + x.rawChoices.join("\n") : "");
-      return { type: "PS", text: text.trim(), choices: [], answer: ans.replace(/\s*(?:\(|\[)?(?:final answer)(?:\)|\])?\s*$/i, ""), points: x.points != null ? x.points : def.ps,
+      // Not multiple choice: lettered lines are parts of the question, e.g. "a) find the speed"
+      var text = (x.text + (x.rawChoices.length ? "\n" + x.rawChoices.join("\n") : "")).trim();
+      if (!type) {
+        // no heading or "Type:" line: decide from the answer
+        if (!ans && !x.solution) type = "ES";
+        else if (x.solution || x.tol != null || /^[-+−]?\s*(\d|\.\d|pi\b|π|sqrt|√)/i.test(ans) || /[\^=]/.test(ans)) type = "PS";
+        else type = "ID";
+      }
+      if (type === "ES") return { type: "ES", text: text, choices: [], answer: "", points: pts("ES"), tol: "", solution: x.solution || ans };
+      if (type === "ID") return { type: "ID", text: text, choices: [], answer: ans, points: pts("ID"), tol: "", solution: x.solution };
+      return { type: "PS", text: text, choices: [], answer: ans.replace(/\s*(?:\(|\[)?(?:final answer)(?:\)|\])?\s*$/i, ""), points: pts("PS"),
                tol: x.tol != null ? x.tol : def.tol, solution: x.solution };
     });
     return { items: out, warnings: warnings };
@@ -877,10 +1021,11 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<div class="stat"><div class="l">Taking it now</div><div class="v">' + n.live + "</div></div>" +
       '<div class="stat"><div class="l">Not started</div><div class="v">' + n.none + "</div></div>" +
       '<div class="stat"><div class="l">Left the page</div><div class="v" style="color:var(--no)">' + n.left + '</div><div class="muted">students, at least once</div></div></div>' +
-      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th><th>Status</th><th>Auto score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
+      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th><th>Status</th><th>Score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
       rows.map(function (r) {
         var a = r.attempt;
-        var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span><div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
+        var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span>' + (a.pending ? ' <span class="pill">' + a.pending + " essay" + (a.pending > 1 ? "s" : "") + " to check</span>" : "") +
+          '<div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
           : '<span class="pill open">In progress</span>' + (a.awayNow ? ' <span class="pill bad">Away now</span>' : "");
         var main = "<tr><td>" + esc(r.no) + '</td><td class="wrap">' + esc(r.name) + (r.extra ? ' <span class="pill">not on list</span>' : "") + (r.blocked ? ' <span class="pill bad">blocked</span>' : "") +
           "</td><td>" + esc(r.section) + "</td><td>" + st + "</td><td>" + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
@@ -903,6 +1048,23 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         }).catch(function (e) { busy(b, false); toast(e.message, true); });
       };
     });
+    body.querySelectorAll("[data-items]").forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.items, scores = {}, bad = "";
+        b.closest(".detail").querySelectorAll("[data-item]").forEach(function (inp) {
+          var v = inp.value.trim();
+          if (v !== "" && !(Number(v) >= 0 && Number(v) <= Number(inp.dataset.max))) bad = "Points must be from 0 to " + inp.dataset.max + ".";
+          scores[inp.dataset.item] = v;
+        });
+        if (bad) return toast(bad, true);
+        busy(b, true, "Saving…");
+        call("admin_saveItemScores", id, scores).then(function (na) {
+          d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { na.row = r.attempt.row; r.attempt = na; } });
+          toast("Points saved. Score: " + na.score + " / " + na.total + (na.pending ? " (" + na.pending + " essay" + (na.pending > 1 ? "s" : "") + " still to check)" : "") + ".");
+          drawResults();
+        }).catch(function (e) { busy(b, false); toast(e.message, true); });
+      };
+    });
     body.querySelectorAll("[data-retake]").forEach(function (b) {
       b.onclick = function () {
         if (!confirm("Allow this student to take the exam again from the start? Their current attempt is kept in the Attempts sheet, marked as reset.")) return;
@@ -917,8 +1079,19 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var html = '<div class="grid2" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)"><div>';
     x.questions.forEach(function (q, i) {
       var mine = a.answers[q.id], it = a.items[i] || {};
-      html += '<div class="qedit" style="border-color:' + (it.ok ? "var(--ok-bd)" : "var(--no-bd)") + '"><div class="qe-head"><b>Q' + (i + 1) + "</b><span>" + (it.ok ? "✅" : "❌") + " " + (it.got || 0) + " / " + q.points + '</span></div><div class="rendered">' + esc(q.text) + "</div>";
-      if (q.type === "MC") {
+      var partial = it.got > 0 && it.got < q.points;
+      var mark = it.pending ? "⏳ to check" : q.type === "ES" ? (it.manual ? "✔ scored" : "") : partial ? "◐ partial" : it.ok ? "✅" : "❌";
+      var border = it.pending ? "var(--amber-line)" : q.type === "ES" || partial ? "var(--line)" : it.ok ? "var(--ok-bd)" : "var(--no-bd)";
+      var given = a.manual && a.manual[q.id] !== undefined ? a.manual[q.id] : "";
+      html += '<div class="qedit" style="border-color:' + border + '"><div class="qe-head"><b>Q' + (i + 1) + "</b><span class=\"pill\">" + typeName(q.type) + "</span><span>" + mark + "</span>" +
+        '<span style="flex:1"></span><label class="check" title="Leave blank to use the automatic score">Points <input class="score" data-item="' + esc(q.id) + '" data-max="' + q.points + '" value="' + esc(given) + '" placeholder="' +
+        (q.type === "ES" ? "—" : esc(it.got || 0)) + '"> / ' + q.points + "</label></div>" + '<div class="rendered">' + esc(q.text) + "</div>";
+      if (q.type === "ID") {
+        html += "<p>Answer: <b>" + esc(mine || "(blank)") + "</b> · Accepted: <b>" + esc(String(q.answer).split("|").map(function (k) { return k.trim(); }).join(", ")) + "</b></p>";
+      } else if (q.type === "ES") {
+        html += (mine ? '<div class="muted">Student\'s answer (' + (String(mine).trim().match(/\S+/g) || []).length + ' words):</div><div class="sol-view">' + esc(mine) + "</div>" : '<p class="muted">No answer written.</p>') +
+          (q.solution ? '<details><summary class="muted">Your guide</summary><div class="sol-view">' + esc(q.solution) + "</div></details>" : "");
+      } else if (q.type === "MC") {
         html += "<p>Answer: <b>" + esc(mine || "(blank)") + (mine ? ". " + esc(q.choices[mine.charCodeAt(0) - 65] || "") : "") + "</b> · Key: <b>" + esc(q.answer) + ". " + esc(q.choices[q.answer.charCodeAt(0) - 65] || "") + "</b></p>";
       } else {
         html += "<p>Final answer: <b>" + esc(mine && mine.a || "(blank)") + "</b> · Key: <b>" + esc(String(q.answer).split("|").join(" or ")) + "</b></p>" +
@@ -926,6 +1099,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       }
       html += "</div>";
     });
+    html += '<div class="btnrow" style="align-items:center"><button class="btn small" data-items="' + esc(a.id) + '">Save points</button>' +
+      '<span class="muted">Type points to score essays, or to change the automatic score of any question (for example, to accept a misspelled answer). Leave blank for the automatic score.</span></div>';
     html += "</div><div><h3>Activity log</h3><p class=\"muted\">Started " + when(a.started) + "<br>Deadline " + when(a.deadline) + "</p><ul class=\"ev-list\">" + (a.events || []).map(function (e) {
       var bad = /left|tried|blocked|fullscreen/.test(e[1]);
       return "<li><span class=\"muted\">" + new Date(e[0]).toLocaleTimeString("en-PH", { timeZone: "Asia/Manila" }) + "</span> · <span class=\"" + (bad ? "bad" : "") + "\">" + esc(e[1]) + "</span>" + (e[2] ? " <span class=\"muted\">(" + esc(e[2]) + ")</span>" : "") + "</li>";
@@ -935,7 +1110,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function csv() {
     var d = resData;
     if (!d) return;
-    var head = ["Student No.", "Name", "Block and Section", "Email", "Status", "Auto score", "Total", "Final score", "Remarks", "Times left page", "Seconds away", "Started", "Submitted", "How submitted"];
+    var head = ["Student No.", "Name", "Block and Section", "Email", "Status", "Score", "Total", "Final score", "Remarks", "Times left page", "Seconds away", "Started", "Submitted", "How submitted"];
     d.exam.questions.forEach(function (q, i) { head.push("Q" + (i + 1)); });
     var rows = [head].concat(d.rows.filter(function (r) { return !resSection || r.section === resSection; }).map(function (r) {
       var a = r.attempt || {};
