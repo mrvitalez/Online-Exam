@@ -515,7 +515,7 @@ function setup() {
       ['Multiple choice', 'What gas do plants absorb from the air for photosynthesis?', 1, 'C', 'Oxygen', 'Nitrogen', 'Carbon dioxide', 'Hydrogen', '', '', ''],
       ['Short answer', 'What is the chemical formula of water?', 2, 'H2O | H₂O', '', '', '', '', '', '', ''],
     ], [130, 380, 60, 160, 140, 140, 140, 140, 120, 120, 170]);
-  qs.sh.getRange('A2:A500').setDataValidation(SpreadsheetApp.newDataValidationRule().requireValueInList(['Multiple choice', 'Short answer'], true).build());
+  qs.sh.getRange('A2:A500').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['Multiple choice', 'Short answer'], true).build());
   qs.sh.getRange('B2:B500').setWrap(true);
   qs.sh.getRange('K:K').setFontColor('#999999');
   qs.sh.getRange('D1').setNote('Multiple choice: the letter of the correct choice (A-F).\nShort answer: every accepted answer, separated by | (not case-sensitive).');
@@ -533,7 +533,7 @@ function setup() {
     [`student.two@${ALLOWED_DOMAIN}`, 'Sample Student Two', 'Section A', false],
     [`student.three@${ALLOWED_DOMAIN}`, 'Sample Student Three', 'Section B', false],
   ], [280, 240, 160, 80]);
-  su.sh.getRange('C2:C2000').setDataValidation(SpreadsheetApp.newDataValidationRule().requireValueInRange(ss.getSheetByName(SHEETS.sections).getRange('A2:A200'), true).setAllowInvalid(true).build());
+  su.sh.getRange('C2:C2000').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(ss.getSheetByName(SHEETS.sections).getRange('A2:A200'), true).setAllowInvalid(true).build());
   su.sh.getRange('D2:D2000').insertCheckboxes();
   su.sh.getRange('D1').setNote('Tick to stop this student from opening the exam.');
   su.sh.getRange('A1').setNote(`Must be an @${ALLOWED_DOMAIN} Google account.`);

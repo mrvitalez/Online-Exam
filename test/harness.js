@@ -7,10 +7,18 @@ const vm = require('vm');
 const http = require('http');
 const crypto = require('crypto');
 
-const chainProxy = (base = {}) => {
-  const p = new Proxy(base, { get: (t, k) => (k in t ? t[k] : k === 'then' ? undefined : () => p) });
+// Strict fakes: only methods that really exist in Apps Script are allowed, so a misspelled
+// or invented method name fails here instead of in Google.
+const chainProxy = (base = {}, chainable = []) => {
+  const p = new Proxy(base, { get: (t, k) => {
+    if (k in t) return t[k];
+    if (chainable.includes(k)) return () => p;
+    if (typeof k === 'symbol' || k === 'then' || k === 'toJSON') return undefined;
+    throw new TypeError(`${String(k)} is not a function (not a known Apps Script method in the test fakes)`);
+  } });
   return p;
 };
+const RANGE_FORMAT = ['setFontWeight', 'setBackground', 'setWrap', 'setHorizontalAlignment', 'setFontColor', 'setNote', 'setNumberFormat', 'setFormula', 'setDataValidation'];
 
 function colNum(letters) { let n = 0; for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64); return n; }
 class Sheet {
@@ -38,7 +46,7 @@ class Sheet {
       setValue: (v) => { sh.set(r, c, v); return self; },
       clearContent: () => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) sh.set(r + i, c + j, ''); return self; },
       insertCheckboxes: () => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) if (sh.cell(r + i, c + j) === '') sh.set(r + i, c + j, false); return self; },
-    });
+    }, RANGE_FORMAT);
     return self;
   }
   activate() {} setFrozenRows() {} setColumnWidth() {}
@@ -59,8 +67,8 @@ const ctx = vm.createContext({
   console, JSON, Date, Math, Object, String, Number, Array,
   SpreadsheetApp: {
     getActiveSpreadsheet: () => ss, getActive: () => ss, flush() {},
-    newDataValidationRule: () => chainProxy(),
-    getUi: () => chainProxy({ alert: () => 'OK', ButtonSet: {}, Button: { OK: 'OK' } }),
+    newDataValidation: () => chainProxy({}, ['requireValueInList', 'requireValueInRange', 'setAllowInvalid', 'build']),
+    getUi: () => chainProxy({ alert: () => 'OK', ButtonSet: { OK: 'OK', OK_CANCEL: 'OK_CANCEL' }, Button: { OK: 'OK' } }),
   },
   PropertiesService: { getScriptProperties: () => ({
     getProperty: (k) => (store.has(k) ? store.get(k) : null),
@@ -72,7 +80,7 @@ const ctx = vm.createContext({
   LockService: { getScriptLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
   Session: { getActiveUser: () => ({ getEmail: () => currentEmail }) },
   Utilities: { getUuid: () => crypto.randomUUID(), formatDate: (d) => d.toISOString().slice(0, 16) },
-  ScriptApp: { getProjectTriggers: () => [], newTrigger: () => chainProxy(), getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/rtu.edu.ph/s/TEST/exec' }) },
+  ScriptApp: { getProjectTriggers: () => [], newTrigger: () => chainProxy({}, ['timeBased', 'everyMinutes', 'create']), getService: () => ({ getUrl: () => 'https://script.google.com/a/macros/rtu.edu.ph/s/TEST/exec' }) },
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'Code.gs'), 'utf8'), ctx, { filename: 'Code.gs' });
 ctx.setup();
