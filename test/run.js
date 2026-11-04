@@ -105,7 +105,7 @@ Answer key
 
   // ---------- admin: create exam from paste ----------
   await ad.click('[data-tab=exams]'); await ad.click('#new');
-  await ad.fill('#f-subject', 'MMW'); await ad.dispatchEvent('#f-subject', 'change');
+  await ad.selectOption('#f-subject', 'MMW');
   await ad.fill('#f-title', 'Midterm Examination');
   await ad.fill('#f-limit', '45');
   await ad.fill('#paste', PASTE);
@@ -120,6 +120,23 @@ Answer key
   const qrows = H.ss.getSheetByName('Questions').data.slice(1).filter((r) => r[0] !== H.ctx.exams_()[0].id);
   check(qrows.length === 6 && qrows[5][6] === '1/6 | 0.1667', 'questions sheet: 6 rows, answers kept as text', qrows.length);
   await ad.screenshot({ path: out + '/a-editor.png', fullPage: true });
+
+  // ---------- admin: subject list, block sections, reading a Word file ----------
+  await ad.click('#back'); await ad.click('#new'); await ad.waitForTimeout(200);
+  const subjOpts = await ad.$$eval('#f-subject option', (o) => o.map((x) => x.value));
+  check(['CAL00', 'MMW'].every((x) => subjOpts.includes(x)) && subjOpts.includes('__new'), 'editor: subject dropdown lists every subject', subjOpts.join(','));
+  await ad.selectOption('#f-subject', 'CAL00'); await ad.waitForTimeout(100);
+  check((await ad.textContent('#f-secs')).includes('CEIT-01-101A') && !(await ad.textContent('#f-secs')).includes('CEIT-03-101E'), 'editor: block sections follow the subject');
+  await ad.selectOption('#f-subject', 'MMW'); await ad.waitForTimeout(100);
+  check((await ad.textContent('#f-secs')).includes('CEIT-03-101E'), 'editor: block sections change with the subject');
+  await ad.setInputFiles('#file', require('path').join(__dirname, 'fixture.docx')); await ad.waitForTimeout(600);
+  const docxRes = (await ad.textContent('#parsed')).replace(/\s+/g, ' ');
+  check(/Found 3 questions: 2 multiple choice, 1 problem solving/.test(docxRes), 'word file: numbered questions and lettered choices read', docxRes.slice(0, 160));
+  check(/picture/.test(docxRes) && /equation/.test(docxRes), 'word file: notes about pictures and equations');
+  const pasteBox = await ad.inputValue('#paste');
+  check(pasteBox.includes('2. Simplify $\\frac{x^{2}}{x}$.') && pasteBox.includes('B. Mercury') && pasteBox.includes('1. A car travels'), 'word file: equation converted to LaTeX, list numbers rebuilt', JSON.stringify(pasteBox.slice(0, 260)));
+  await ad.screenshot({ path: out + '/a-docx.png', fullPage: true });
+  await ad.click('#back'); await ad.waitForTimeout(200);
 
   // ---------- students ----------
   const juan = '2026-100001@rtu.edu.ph';
@@ -191,7 +208,7 @@ Answer key
   check(/no closing time/.test(await ad.textContent('#view')), 'editor: warns that solutions need a closing time');
   await ad.fill('#f-opens', '2026-01-01T08:00'); // opened earlier (the test runs within one minute)
   await ad.click('#close-now'); await ad.click('#save'); await ad.waitForTimeout(500);
-  check(/Saved/.test(await ad.textContent('#toast')), 'editor: closed the exam with Close now', await ad.textContent('#toast'));
+  check(/This exam is closed/.test(await ad.textContent('#toast')), 'editor: closed the exam with Close now', await ad.textContent('#toast'));
   H.setClock(60000);
   const s1b = await open(juan);
   await s1b.click('[data-review]'); await s1b.waitForTimeout(500);
@@ -206,6 +223,24 @@ Answer key
   await ad.click('#r-body tbody tr:has-text("REYES") [data-retake]'); await ad.waitForTimeout(500);
   const reset = H.ss.getSheetByName('Attempts').data.some((r) => /reset-/.test(r[0]) && r[8] === 'Reset (retake allowed)');
   check(reset, 'retake: attempt marked as reset');
+
+  // ---------- class list: remove and add ----------
+  await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);
+  await ad.selectOption('#ro-subj', 'CAL00'); await ad.waitForTimeout(100);
+  await ad.click('#ro-rm-shown'); await ad.waitForTimeout(500);
+  const left = H.ss.getSheetByName('Class List').data.slice(1).filter((r) => r[0]);
+  check(left.length === 3 && left.every((r) => r[2] === 'MMW'), 'class list: removed all CAL00 students shown', left.length);
+  await ad.selectOption('#ro-subj', ''); await ad.waitForTimeout(100);
+  await ad.click('button[data-rm="2026-100003"]'); await ad.waitForTimeout(500);
+  check(!H.ss.getSheetByName('Class List').data.some((r) => r[0] === '2026-100003'), 'class list: removed one student');
+  await ad.fill('#add-no', '2026-300001'); await ad.fill('#add-name', 'LIM, CARLO'); await ad.fill('#add-subj', 'PHYMECH'); await ad.fill('#add-sec', 'CEIT-02-101B');
+  await ad.click('#add-go'); await ad.waitForTimeout(500);
+  const added = H.ss.getSheetByName('Class List').data.find((r) => r[0] === '2026-300001');
+  check(added && added[2] === 'PHYMECH' && added[4] === '2026-300001@rtu.edu.ph', 'class list: student added by hand', JSON.stringify(added));
+  await ad.screenshot({ path: out + '/a-classlist2.png', fullPage: true });
+  await ad.click('[data-tab=exams]'); await ad.click('#new'); await ad.waitForTimeout(200);
+  const subj2 = await ad.$$eval('#f-subject option', (o) => o.map((x) => x.value));
+  check(subj2.includes('PHYMECH') && !subj2.includes('CAL00'), 'editor: subject list follows the class list', subj2.join(','));
 
   check(errors.length === 0, 'no page errors', errors.join(' | '));
   console.log(failures ? `\n${failures} FAILED` : '\nALL PASSED');

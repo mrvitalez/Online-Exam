@@ -943,6 +943,44 @@ function admin_setBlocked(studentNo, subject, blocked) {
   throw new Error('Student not found on the class list.');
 }
 
+/** Removes enrolments from the class list. list: [[student no., subject], ...] */
+function admin_removeStudents(list) {
+  requireAdmin_();
+  var drop = {};
+  (list || []).forEach(function (p) { drop[String(p[0]).trim() + '|' + subjKey_(p[1])] = 1; });
+  var rows = rows_(TABS.CLASS, CLASS_HEAD.length, true).filter(function (r) { return String(r[0]).trim(); });
+  var keep = rows.filter(function (r) { return !drop[String(r[0]).trim() + '|' + subjKey_(r[2])]; });
+  writeTable_(TABS.CLASS, CLASS_HEAD, keep.map(classRow_), [1]);
+  invalidate_([]);
+  var res = admin_classList();
+  res.removed = rows.length - keep.length;
+  return res;
+}
+
+/** Adds one student to a subject (or updates their name and block section if already there). */
+function admin_addStudent(s) {
+  requireAdmin_();
+  s = s || {};
+  var no = String(s.no || '').trim(), name = clean_(s.name, 120), subject = clean_(s.subject, 40), section = clean_(s.section, 60);
+  if (!/^\d{4}-\d{4,8}$/.test(no)) throw new Error('Type the student number like 2026-101878.');
+  if (!name || !subject || !section) throw new Error('Fill in the name, subject and block section.');
+  var rows = rows_(TABS.CLASS, CLASS_HEAD.length, true).filter(function (r) { return String(r[0]).trim(); }).map(classRow_);
+  var hit = rows.filter(function (r) { return r[0] === no && subjKey_(r[2]) === subjKey_(subject); })[0];
+  if (hit) { hit[1] = name; hit[3] = section; }
+  else rows.push([no, name, subject, section, numberEmail_(no), false]);
+  rows.sort(function (a, b) { return cmp_(a[2], b[2]) || cmp_(a[3], b[3]) || cmp_(a[1], b[1]); });
+  writeTable_(TABS.CLASS, CLASS_HEAD, rows, [1]);
+  invalidate_([]);
+  var res = admin_classList();
+  res.added = hit ? 'updated' : 'added';
+  return res;
+}
+
+function classRow_(r) {
+  var no = String(r[0]).trim();
+  return [no, r[1], r[2], r[3], String(r[4]).trim() || numberEmail_(no), truthy_(r[5])];
+}
+
 function openBook_(url) {
   var m = String(url || '').match(/\/d\/([\w-]{20,})/);
   if (!m) throw new Error('Paste the address of your record book (a Google Sheets link).');

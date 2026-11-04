@@ -201,8 +201,10 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       (x.counts && (x.counts.live || x.counts.done) ? '<div class="notice">⚠️ ' + x.counts.live + " student(s) are taking this exam and " + x.counts.done +
         " have submitted. Fixing a typo or an answer is fine (scores are re-graded); avoid adding or removing questions now.</div>" : "") +
       '<div class="form-grid" style="margin-top:12px">' +
-      '<label class="field">Subject<input type="text" id="f-subject" list="subj-list" value="' + esc(x.subject) + '" placeholder="e.g. MMW"><datalist id="subj-list">' +
-      subs.map(function (s) { return '<option value="' + esc(s) + '">'; }).join("") + "</datalist></label>" +
+      '<label class="field">Subject<select id="f-subject">' + (x.subject ? "" : '<option value="" selected>Choose a subject…</option>') +
+      subs.concat(x.subject && subs.indexOf(x.subject) < 0 ? [x.subject] : []).map(function (s) {
+        return '<option value="' + esc(s) + '"' + (s === x.subject ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") +
+      '<option value="__new">+ New subject…</option></select></label>' +
       '<label class="field wide">Exam title<input type="text" id="f-title" value="' + esc(x.title) + '" placeholder="e.g. Midterm Examination"></label>' +
       '<label class="field">Opens (Philippine time)<input type="datetime-local" id="f-opens" value="' + esc(x.opensText) + '"></label>' +
       '<label class="field">Closes (Philippine time)<input type="datetime-local" id="f-closes" value="' + esc(x.closesText) + '"></label>' +
@@ -214,10 +216,10 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="field">Status<select id="f-status"><option value="Draft"' + (x.status !== "Published" ? " selected" : "") + '>Draft (hidden from students)</option>' +
       '<option value="Published"' + (x.status === "Published" ? " selected" : "") + ">Published (on schedule)</option></select></label>" +
       '<label class="field wide">Instructions shown to students<textarea id="f-instr" style="min-height:70px">' + esc(x.instructions) + "</textarea></label>" +
-      '<div class="wide"><div class="muted" style="font-weight:700">Block sections that take this exam</div><div id="f-secs" class="btnrow" style="margin-top:6px">' +
+      '<div class="wide"><div class="muted" style="font-weight:700">Block sections of ' + esc(x.subject || "this subject") + ' that take this exam</div><div id="f-secs" class="btnrow" style="margin-top:6px">' +
       (secs.length ? secs.map(function (s) {
         return '<label class="check"><input type="checkbox" value="' + esc(s) + '"' + (x.sections.indexOf(s) >= 0 ? " checked" : "") + "> " + esc(s) + "</label>";
-      }).join("") : '<span class="muted">No block sections for this subject on the class list yet.</span>') +
+      }).join("") : '<span class="muted">' + (x.subject ? "No students of " + esc(x.subject) + " on the class list yet. Import them in the Class list tab." : "Choose the subject first.") + "</span>") +
       '</div><div class="muted">Tick none to give the exam to every block section of the subject.</div></div>' +
       '<div class="wide btnrow">' +
       '<label class="check"><input type="checkbox" id="f-shq"' + (x.shuffleQ ? " checked" : "") + "> Shuffle question order</label>" +
@@ -242,6 +244,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       "<code>Part I</code> / <code>Part II</code> where numbering starts again. Points and tolerance lines are optional. " +
       "In solutions, number steps as <code>Step 1</code> or <code>(1)</code>, not <code>1.</code>, so they are not mistaken for new questions. " +
       "Several accepted answers: <code>Answer: 0.5 | 1/2</code>.</p></details>" +
+      '<div class="btnrow" style="align-items:center;margin-top:12px"><label class="btn ghost small" style="cursor:pointer">📎 Choose a file (Word .docx or .txt)' +
+      '<input type="file" id="file" accept=".docx,.txt,.md,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>' +
+      '<span class="muted">The file is read into the box below and checked. From Google Docs: File > Download > Microsoft Word (.docx).</span></div>' +
       '<label class="field" style="margin-top:12px">Paste here<textarea id="paste" placeholder="1. Question…&#10;A. …&#10;B. …&#10;Answer: B"></textarea></label>' +
       '<div class="btnrow" style="align-items:flex-end;margin-top:8px">' +
       '<label class="field">Points, multiple choice<input type="number" min="0" step="any" id="d-mc" value="1" style="width:120px"></label>' +
@@ -330,14 +335,39 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var sec = view.querySelectorAll("section.ch")[0];
     sec.addEventListener("input", markDirty);
     sec.addEventListener("change", markDirty);
-    g("f-subject").addEventListener("change", function () { readForm(); editor(); });
+    g("f-subject").addEventListener("change", function () {
+      if (this.value === "__new") {
+        var name = (prompt("Subject code, as in your record book (for example PHYMECH, CAL01, MMW):") || "").trim();
+        if (!name) { this.value = ED.subject; return; }
+        this.innerHTML += '<option value="' + esc(name) + '">' + esc(name) + "</option>";
+        this.value = name;
+      }
+      readForm(); ED.sections = []; editor();
+    });
     g("open-now").onclick = function () { g("f-opens").value = nowLocal(); markDirty(); };
     g("close-now").onclick = function () { g("f-closes").value = nowLocal(); markDirty(); };
-    g("read").onclick = function () {
+    function readPasted() {
       var text = g("paste").value;
       if (!text.trim()) return toast("Paste your questions first.", true);
       parsed = parsePaste(text, { mc: Number(g("d-mc").value) || 0, ps: Number(g("d-ps").value) || 0, tol: Number(g("d-tol").value) || 0 });
+      if (fileNotes.length) parsed.warnings = fileNotes.concat(parsed.warnings);
       showParsed();
+    }
+    var fileNotes = [];
+    g("read").onclick = function () { fileNotes = []; readPasted(); };
+    g("file").onchange = function () {
+      var f = this.files[0];
+      this.value = "";
+      if (!f) return;
+      var isDocx = /\.docx$/i.test(f.name);
+      if (!isDocx && !/\.(txt|md)$/i.test(f.name) && f.type !== "text/plain") return toast("Choose a Word (.docx) or text (.txt) file. For a .doc or PDF, open it in Word or Google Docs and save it as .docx.", true);
+      toast("Reading " + f.name + "…");
+      (isDocx ? f.arrayBuffer().then(docxToText) : f.text().then(function (t) { return { text: t, notes: [] }; })).then(function (r) {
+        g("paste").value = r.text;
+        fileNotes = r.notes;
+        readPasted();
+        g("parsed").scrollIntoView({ behavior: "smooth", block: "start" });
+      }).catch(function (e) { toast("Could not read " + f.name + ": " + e.message, true); });
     };
     g("add-mc").onclick = function () { readForm(); ED.questions.push({ type: "MC", text: "", choices: ["", "", "", ""], answer: "A", points: 1, tol: "", solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
     g("add-ps").onclick = function () { readForm(); ED.questions.push({ type: "PS", text: "", choices: [], answer: "", points: 5, tol: 1, solution: "" }); markDirty(); editor(); scrollToCard(ED.questions.length - 1); };
@@ -400,7 +430,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     busy(btn, true);
     call("admin_saveExam", ED).then(function (x) {
       ED = x; edDirty = false;
-      return reload().then(function () { editor(); toast(x.status === "Published" ? "Saved. Students see this exam " + (x.opens > Date.now() ? "from " + when(x.opens) : "now") + "." : "Saved as a draft."); });
+      return reload().then(function () { editor(); toast(x.status !== "Published" ? "Saved as a draft." : x.closes && x.closes <= Date.now() ? "Saved. This exam is closed." :
+        "Saved. Students see this exam " + (x.opens > Date.now() ? "from " + when(x.opens) : "now") + "."); });
     }).catch(function (e) { busy(btn, false); toast(e.message, true); });
   }
 
@@ -440,6 +471,153 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (document.getElementById("p-replace")) document.getElementById("p-replace").onclick = function () { if (confirm("Replace all current questions with the pasted ones?")) add(true); };
     if (document.getElementById("p-clear")) document.getElementById("p-clear").onclick = function () { parsed = null; box.innerHTML = ""; };
   }
+
+  // ---------- reading a Word file (.docx) ----------
+  // A .docx is a zip of XML files. It is unzipped here with the browser's own DecompressionStream, so no
+  // library or upload is needed. Word's automatic list numbers (1. 2. / A. B.) are rebuilt from numbering.xml,
+  // and Word equations are turned into LaTeX between $ signs.
+  function unzip(buf) {
+    var u8 = new Uint8Array(buf), dv = new DataView(buf), files = {}, end = -1;
+    for (var i = u8.length - 22; i >= Math.max(0, u8.length - 65600); i--) if (dv.getUint32(i, true) === 0x06054b50) { end = i; break; }
+    if (end < 0) throw new Error("this is not a Word .docx file");
+    var count = dv.getUint16(end + 10, true), off = dv.getUint32(end + 16, true), dec = new TextDecoder();
+    for (var k = 0; k < count && dv.getUint32(off, true) === 0x02014b50; k++) {
+      var nlen = dv.getUint16(off + 28, true);
+      files[dec.decode(u8.subarray(off + 46, off + 46 + nlen))] = { method: dv.getUint16(off + 10, true), size: dv.getUint32(off + 20, true), at: dv.getUint32(off + 42, true) };
+      off += 46 + nlen + dv.getUint16(off + 30, true) + dv.getUint16(off + 32, true);
+    }
+    return function read(name) {
+      var f = files[name];
+      if (!f) return Promise.resolve(null);
+      var start = f.at + 30 + dv.getUint16(f.at + 26, true) + dv.getUint16(f.at + 28, true);
+      var data = u8.subarray(start, start + f.size);
+      if (f.method === 0) return Promise.resolve(dec.decode(data));
+      if (f.method !== 8 || typeof DecompressionStream === "undefined") return Promise.reject(new Error("this browser cannot open .docx files; use the latest Chrome or Edge"));
+      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer().then(function (b) { return dec.decode(b); });
+    };
+  }
+  function docxToText(buf) {
+    var read = unzip(buf);
+    return Promise.all(["word/document.xml", "word/numbering.xml", "word/styles.xml"].map(read)).then(function (x) {
+      if (!x[0]) throw new Error("this is not a Word .docx file");
+      return docxLines(x[0], x[1], x[2]);
+    });
+  }
+  function docxLines(docXml, numXml, styleXml) {
+    var W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    var parse = function (t) { return t ? new DOMParser().parseFromString(t, "application/xml") : null; };
+    var kids = function (n, name) { return [].filter.call(n.childNodes, function (c) { return c.nodeType === 1 && (!name || c.localName === name); }); };
+    var kid = function (n, name) { return n ? kids(n, name)[0] || null : null; };
+    var val = function (n) { return n ? n.getAttributeNS(W, "val") || n.getAttribute("w:val") || "" : ""; };
+    var abs = {}, nums = {}, styleNum = {};
+    var nd = parse(numXml);
+    if (nd) {
+      [].forEach.call(nd.getElementsByTagNameNS(W, "abstractNum"), function (a) {
+        var lv = abs[a.getAttributeNS(W, "abstractNumId")] = {};
+        kids(a, "lvl").forEach(function (l) { lv[l.getAttributeNS(W, "ilvl")] = { fmt: val(kid(l, "numFmt")), text: val(kid(l, "lvlText")), start: Number(val(kid(l, "start")) || 1) }; });
+      });
+      [].forEach.call(nd.getElementsByTagNameNS(W, "num"), function (n) {
+        var o = {};
+        kids(n, "lvlOverride").forEach(function (lo) { var so = kid(lo, "startOverride"); if (so) o[lo.getAttributeNS(W, "ilvl")] = Number(val(so)); });
+        nums[n.getAttributeNS(W, "numId")] = { abs: val(kid(n, "abstractNumId")), over: o };
+      });
+    }
+    var sd = parse(styleXml);
+    if (sd) [].forEach.call(sd.getElementsByTagNameNS(W, "style"), function (st) {
+      var np = st.getElementsByTagNameNS(W, "numPr")[0];
+      if (np) styleNum[st.getAttributeNS(W, "styleId")] = { id: val(kid(np, "numId")), lvl: val(kid(np, "ilvl")) || "0" };
+    });
+    function fmt(n, f) {
+      if (/letter/i.test(f)) { var s = ""; while (n > 0) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return /lower/.test(f) ? s.toLowerCase() : s; }
+      if (/roman/i.test(f)) {
+        var r = "", v = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]];
+        v.forEach(function (p) { while (n >= p[0]) { r += p[1]; n -= p[0]; } });
+        return /lower/.test(f) ? r.toLowerCase() : r;
+      }
+      return String(n);
+    }
+    var counters = {}, seenNum = {}, pictures = 0, equations = 0;
+    function listPrefix(p) {
+      var ppr = kid(p, "pPr"), np = kid(ppr, "numPr"), id, lvl;
+      if (np) { id = val(kid(np, "numId")); lvl = val(kid(np, "ilvl")) || "0"; }
+      else { var st = styleNum[val(kid(ppr, "pStyle"))]; if (!st) return ""; id = st.id; lvl = st.lvl; }
+      var num = nums[id];
+      if (!num || id === "0" || !abs[num.abs]) return "";
+      var levels = abs[num.abs], L = Number(lvl), c = counters[num.abs] = counters[num.abs] || [];
+      if (!seenNum[id]) { seenNum[id] = 1; Object.keys(num.over).forEach(function (k) { c[k] = num.over[k] - 1; c.length = Number(k) + 1; }); }
+      c[L] = c[L] == null ? (levels[L] ? levels[L].start : 1) : c[L] + 1;
+      c.length = L + 1;
+      for (var i = 0; i < L; i++) if (c[i] == null) c[i] = levels[i] ? levels[i].start : 1;
+      var lv = levels[L];
+      if (!lv || lv.fmt === "bullet" || lv.fmt === "none") return "";
+      return lv.text.replace(/%(\d)/g, function (m, d) { var k = Number(d) - 1; return fmt(c[k], (levels[k] || {}).fmt || "decimal"); }) + " ";
+    }
+    function text(n) {
+      var out = "";
+      kids(n).forEach(function (c) {
+        var name = c.localName;
+        if (c.namespaceURI !== W && (name === "oMath" || name === "oMathPara")) { equations++; out += "$" + omml(c).trim() + "$"; }
+        else if (name === "t") out += c.textContent;
+        else if (name === "tab") out += " ";
+        else if (name === "br" || name === "cr") out += "\n";
+        else if (name === "drawing" || name === "pict" || name === "object") pictures++;
+        else if (name === "p") return;                        // a paragraph inside a text box is read on its own
+        else if (name === "delText" || name === "instrText" || name === "pPr" || name === "rPr") return;
+        else out += text(c);
+      });
+      return out;
+    }
+    var doc = parse(docXml);
+    var lines = [].map.call(doc.getElementsByTagNameNS(W, "p"), function (p) { return listPrefix(p) + text(p); });
+    var notes = [];
+    if (pictures) notes.push(pictures + " picture(s) in the file were not imported. Add figures to those questions as text, or describe them.");
+    if (equations) notes.push(equations + " Word equation(s) were turned into math. Check them in the preview (tick \"Show how students will see the math\" after adding).");
+    return { text: lines.join("\n").replace(/\n{3,}/g, "\n\n"), notes: notes };
+  }
+  // Word equation (OMML) -> LaTeX
+  function omml(n) {
+    var kids = function (x) { return [].filter.call(x.childNodes, function (c) { return c.nodeType === 1; }); };
+    var part = function (x, name) { var c = kids(x).filter(function (k) { return k.localName === name; })[0]; return c ? kids(c).map(omml).join("") : ""; };
+    var prop = function (x, pr, name) {
+      var p = kids(x).filter(function (k) { return k.localName === pr; })[0];
+      var c = p && kids(p).filter(function (k) { return k.localName === name; })[0];
+      return c ? c.getAttribute("m:val") || c.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/math", "val") || "" : null;
+    };
+    var g = function (s) { return s.length > 1 ? "{" + s + "}" : s; };
+    var BIG = { "∑": "\\sum", "∫": "\\int", "∬": "\\iint", "∮": "\\oint", "∏": "\\prod", "⋃": "\\bigcup", "⋂": "\\bigcap" };
+    var FN = /^(sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|arcsin|arccos|arctan|ln|log|exp|lim|max|min|det)$/;
+    var ACC = { "̂": "\\hat", "^": "\\hat", "̇": "\\dot", "̈": "\\ddot", "⃗": "\\vec", "→": "\\vec", "̃": "\\tilde", "̄": "\\bar", "¯": "\\bar" };
+    var DEL = { "{": "\\{", "}": "\\}", "|": "|", "‖": "\\|", "⌈": "\\lceil", "⌉": "\\rceil", "⌊": "\\lfloor", "⌋": "\\rfloor", "〈": "\\langle", "〉": "\\rangle", "": "." };
+    switch (n.localName) {
+      case "t": return n.textContent;
+      case "f": return "\\frac{" + part(n, "num") + "}{" + part(n, "den") + "}";
+      case "sSup": return g(part(n, "e")) + "^{" + part(n, "sup") + "}";
+      case "sSub": return g(part(n, "e")) + "_{" + part(n, "sub") + "}";
+      case "sSubSup": return g(part(n, "e")) + "_{" + part(n, "sub") + "}^{" + part(n, "sup") + "}";
+      case "sPre": return "{}_{" + part(n, "sub") + "}^{" + part(n, "sup") + "}" + part(n, "e");
+      case "rad": var deg = part(n, "deg"); return "\\sqrt" + (deg ? "[" + deg + "]" : "") + "{" + part(n, "e") + "}";
+      case "d":
+        var b = prop(n, "dPr", "begChr"), e = prop(n, "dPr", "endChr"), sep = prop(n, "dPr", "sepChr");
+        b = b == null ? "(" : b; e = e == null ? ")" : e;
+        var inner = kids(n).filter(function (k) { return k.localName === "e"; }).map(function (k) { return kids(k).map(omml).join(""); }).join(sep == null ? "," : sep);
+        return "\\left" + (DEL[b] || b) + inner + "\\right" + (DEL[e] || e);
+      case "nary":
+        var ch = prop(n, "naryPr", "chr");
+        return (BIG[ch == null ? "∫" : ch] || ch) + (part(n, "sub") ? "_{" + part(n, "sub") + "}" : "") + (part(n, "sup") ? "^{" + part(n, "sup") + "}" : "") + " " + part(n, "e");
+      case "func": var fn = part(n, "fName").trim(); return (FN.test(fn) ? "\\" + fn : fn) + " " + part(n, "e");
+      case "limLow": var base = part(n, "e").trim(); return (FN.test(base) ? "\\" + base : base) + "_{" + part(n, "lim") + "}";
+      case "limUpp": return part(n, "e") + "^{" + part(n, "lim") + "}";
+      case "acc": var a = prop(n, "accPr", "chr"); return (ACC[a == null ? "̂" : a] || "\\hat") + "{" + part(n, "e") + "}";
+      case "bar": return "\\overline{" + part(n, "e") + "}";
+      case "eqArr": return kids(n).filter(function (k) { return k.localName === "e"; }).map(function (k) { return kids(k).map(omml).join(""); }).join(" \\\\ ");
+      case "m": return "\\begin{matrix}" + kids(n).filter(function (k) { return k.localName === "mr"; }).map(function (r) {
+        return kids(r).filter(function (k) { return k.localName === "e"; }).map(function (k) { return kids(k).map(omml).join(""); }).join(" & "); }).join(" \\\\ ") + "\\end{matrix}";
+      default:
+        if (/Pr$/.test(n.localName)) return "";
+        return kids(n).map(omml).join("");
+    }
+  }
+  window.__docxLines = docxLines; // for testing
 
   // ---------- reading pasted questions ----------
   function parsePaste(text, def) {
@@ -757,17 +935,54 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="field">Subject<select id="ro-subj"><option value="">All</option>' + Object.keys(subs).sort().map(function (s) { return "<option" + (s === rosterFilter.subject ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field">Block section<select id="ro-sec"><option value="">All</option>' + Object.keys(secs).sort().map(function (s) { return "<option" + (s === rosterFilter.section ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field" style="min-width:220px">Search<input type="text" id="ro-q" value="' + esc(rosterFilter.q) + '" placeholder="Student number or name"></label></div>' +
-      '<p class="muted">' + rows.length + " of " + d.rows.length + " enrolments shown. Tick <b>Blocked</b> to stop a student from opening that subject's exams.</p>" +
-      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Subject</th><th>Block and section</th><th>Email</th><th>Blocked</th></tr></thead><tbody>' +
+      '<div class="btnrow" style="align-items:center;margin-bottom:8px"><span class="muted">' + rows.length + " of " + d.rows.length + " enrolments shown. Tick <b>Blocked</b> to stop a student from opening that subject's exams.</span>" +
+      (rows.length && (rosterFilter.subject || rosterFilter.section || rosterFilter.q) ? '<button class="btn small danger" id="ro-rm-shown">Remove the ' + rows.length + " shown</button>" : "") + "</div>" +
+      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Subject</th><th>Block and section</th><th>Email</th><th>Blocked</th><th></th></tr></thead><tbody>' +
       rows.slice(0, 600).map(function (r) {
         return "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td><td>" + esc(r[2]) + "</td><td>" + esc(r[3]) + "</td><td>" + esc(r[4]) + "</td>" +
-          '<td><input type="checkbox" data-block="' + esc(r[0]) + '" data-subj="' + esc(r[2]) + '"' + (/^true$/i.test(r[5]) ? " checked" : "") + "></td></tr>";
-      }).join("") + (rows.length > 600 ? '<tr><td colspan="6" class="muted">Showing the first 600. Use the filters to narrow the list.</td></tr>' : "") +
-      (d.rows.length ? "" : '<tr><td colspan="6" class="muted">No students yet. Import them from your record book above.</td></tr>') + "</tbody></table></div>";
+          '<td><input type="checkbox" data-block="' + esc(r[0]) + '" data-subj="' + esc(r[2]) + '"' + (/^true$/i.test(r[5]) ? " checked" : "") + "></td>" +
+          '<td><button class="btn small ghost" data-rm="' + esc(r[0]) + '" data-subj="' + esc(r[2]) + '" title="Remove from this subject">✕ Remove</button></td></tr>';
+      }).join("") + (rows.length > 600 ? '<tr><td colspan="7" class="muted">Showing the first 600. Use the filters to narrow the list.</td></tr>' : "") +
+      (d.rows.length ? "" : '<tr><td colspan="7" class="muted">No students yet. Import them from your record book above, or add them below.</td></tr>') + "</tbody></table></div>" +
+      '<h3>Add a student</h3><p class="muted" style="margin-top:0">For a student who is not in the record book yet, or was removed by mistake. If the student is already in that subject, their name and block section are updated.</p>' +
+      '<div class="btnrow" style="align-items:flex-end"><label class="field">Student number<input type="text" id="add-no" placeholder="2026-101878" style="width:150px"></label>' +
+      '<label class="field" style="min-width:220px">Name<input type="text" id="add-name" placeholder="DELA CRUZ, JUAN P."></label>' +
+      '<label class="field">Subject<input type="text" id="add-subj" list="add-subj-list" value="' + esc(rosterFilter.subject) + '" style="width:140px"><datalist id="add-subj-list">' +
+      Object.keys(subs).sort().map(function (x) { return '<option value="' + esc(x) + '">'; }).join("") + "</datalist></label>" +
+      '<label class="field">Block and section<input type="text" id="add-sec" list="add-sec-list" value="' + esc(rosterFilter.section) + '" style="width:170px"><datalist id="add-sec-list">' +
+      Object.keys(secs).sort().map(function (x) { return '<option value="' + esc(x) + '">'; }).join("") + "</datalist></label>" +
+      '<button class="btn" id="add-go">Add student</button></div>';
     document.getElementById("ro-subj").onchange = function () { rosterFilter.subject = this.value; rosterFilter.section = ""; drawRoster(); };
     document.getElementById("ro-sec").onchange = function () { rosterFilter.section = this.value; drawRoster(); };
     var qi = document.getElementById("ro-q");
     qi.oninput = function () { rosterFilter.q = this.value; var pos = this.selectionStart; drawRoster(); var n = document.getElementById("ro-q"); n.focus(); n.setSelectionRange(pos, pos); };
+    function removeList(list, what, btn) {
+      if (!confirm("Remove " + what + " from the class list?\n\nThey will no longer see that subject's exams. Their past exam results stay in the Attempts sheet. You can import or add them again later.")) return;
+      busy(btn, true, "Removing…");
+      call("admin_removeStudents", list).then(function (nd) {
+        rosterData = nd; toast(nd.removed + " removed."); drawRoster(); return reload();
+      }).catch(function (e) { busy(btn, false); toast(e.message, true); });
+    }
+    body.querySelectorAll("[data-rm]").forEach(function (b) {
+      b.onclick = function () {
+        var r = d.rows.filter(function (x) { return x[0] === b.dataset.rm && x[2] === b.dataset.subj; })[0];
+        removeList([[b.dataset.rm, b.dataset.subj]], (r ? r[1] + " (" + r[0] + ")" : b.dataset.rm) + " from " + b.dataset.subj, b);
+      };
+    });
+    if (document.getElementById("ro-rm-shown")) document.getElementById("ro-rm-shown").onclick = function () {
+      var what = rows.length + " student" + (rows.length === 1 ? "" : "s") + " (" + [rosterFilter.subject, rosterFilter.section, rosterFilter.q && '"' + rosterFilter.q + '"'].filter(String).join(" · ") + ")";
+      removeList(rows.map(function (r) { return [r[0], r[2]]; }), "these " + what, this);
+    };
+    document.getElementById("add-go").onclick = function () {
+      var b = this, v = function (id) { return document.getElementById(id).value.trim(); };
+      var st = { no: v("add-no"), name: v("add-name"), subject: v("add-subj"), section: v("add-sec") };
+      if (!/^\d{4}-\d{4,8}$/.test(st.no)) return toast("Type the student number like 2026-101878.", true);
+      if (!st.name || !st.subject || !st.section) return toast("Fill in the name, subject and block section.", true);
+      busy(b, true, "Adding…");
+      call("admin_addStudent", st).then(function (nd) {
+        rosterData = nd; toast(st.name + (nd.added === "updated" ? " updated." : " added to " + st.subject + ".")); drawRoster(); return reload();
+      }).catch(function (e) { busy(b, false); toast(e.message, true); });
+    };
     body.querySelectorAll("[data-block]").forEach(function (c) {
       c.onchange = function () {
         var on = c.checked;
