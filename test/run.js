@@ -66,6 +66,26 @@ Answer key
   check(!H.triggers.some((t) => t.getHandlerFunction() === 'syncResults'), 'setup: old every-minute trigger removed');
   const b = await chromium.launch();
   const ctxB = await b.newContext({ viewport: { width: 1200, height: 900 } });
+  // pdf.js is loaded from a public CDN in the real site; the tests serve a local copy (npm pack pdfjs-dist@3.11.174)
+  const VENDOR = require('path').join(__dirname, 'vendor');
+  const havePdfJs = require('fs').existsSync(VENDOR + '/pdf.min.js');
+  await ctxB.route(/cdnjs\.cloudflare\.com\/ajax\/libs\/pdf\.js\/.*\/(pdf(\.worker)?\.min\.js)$/, (route) => {
+    const f = route.request().url().split('/').pop();
+    route.fulfill({ path: VENDOR + '/' + f, contentType: 'text/javascript', headers: { 'Access-Control-Allow-Origin': '*' } });
+  });
+  // a PDF made like a printed exam: numbered questions, choices on lines and side by side, a power, page numbers
+  const pdfPage = await b.newPage();
+  await pdfPage.setContent(`<div style="font:14px Arial;line-height:1.5">
+    <p><b>MIDTERM EXAMINATION</b></p><p>Part I. Multiple choice</p>
+    <p>1. Which planet is closest to the Sun?<br>A. Venus<br>B. Mercury<br>C. Earth<br>D. Mars</p><p>Answer: B</p>
+    <p>2. What is the value of x<sup>2</sup> when x = 3?</p><p>A. 6 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; B. 9 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; C. 12 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; D. 27</p><p>Answer: B</p>
+    <div style="page-break-after:always"></div>
+    <p>Part II. Problem solving</p><p>1. A car travels 120 km in 2 hours. What is its average speed in km/h? Give your answer as a whole number and show your solution clearly.</p>
+    <p>Answer: 60</p><p>Solution: speed = distance / time = 120 / 2 = 60 km/h</p></div>`);
+  const PDF_FILE = require('path').join(__dirname, 'fixture.pdf');
+  await pdfPage.pdf({ path: PDF_FILE, format: 'A4', displayHeaderFooter: true, headerTemplate: '<span></span>',
+    footerTemplate: '<div style="font-size:10px;width:100%;text-align:center"><span class="pageNumber"></span></div>', margin: { top: '20mm', bottom: '20mm' } });
+  await pdfPage.close();
   const errors = [];
   const open = async (email, admin) => {
     const p = await ctxB.newPage();
@@ -87,6 +107,8 @@ Answer key
   check(P.items[5].text.includes('a) list the outcomes') && P.items[5].answer === '1/6 | 0.1667' && P.items[5].tol === 1, 'paste: PS sub-parts stay in the question', JSON.stringify(P.items[5]));
   check(P.warnings.some((w) => /Ignored/.test(w)), 'paste: heading before question 1 reported as ignored', P.warnings.join(' | '));
   const P2 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1) What is 2+2?\n(a) 3\n(b) 4\nAns: b\n\n2. Velocity after 3 s from rest at 2 m/s²?\nAnswer: 6 m/s\nSolution: v = at\n1. wrong-looking step\n= 6 m/s');
+  const P3 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1. Explain your\nsolution clearly. What is 2 + 2?\nAnswer: 4\nSolution - add them\n2. Next?\nAnswer: 1\nSol.\nobvious');
+  check(P3.items.length === 2 && P3.items[0].text.includes('solution clearly') && P3.items[0].solution === 'add them' && P3.items[1].solution === 'obvious', 'paste: a sentence starting with "solution" is not a Solution label', JSON.stringify(P3.items.map((q) => [q.text, q.solution])));
   check(P2.items.length === 2 && P2.items[0].answer === 'B' && P2.items[1].solution.includes('wrong-looking'), 'paste: "1." inside a solution does not start a new question', JSON.stringify(P2.items.map((q) => q.answer)));
 
   // ---------- admin: import class list ----------
@@ -136,6 +158,16 @@ Answer key
   const pasteBox = await ad.inputValue('#paste');
   check(pasteBox.includes('2. Simplify $\\frac{x^{2}}{x}$.') && pasteBox.includes('B. Mercury') && pasteBox.includes('1. A car travels'), 'word file: equation converted to LaTeX, list numbers rebuilt', JSON.stringify(pasteBox.slice(0, 260)));
   await ad.screenshot({ path: out + '/a-docx.png', fullPage: true });
+  if (havePdfJs) {
+    await ad.setInputFiles('#file', PDF_FILE); await ad.waitForTimeout(2500);
+    const pdfRes = (await ad.textContent('#parsed')).replace(/\s+/g, ' ');
+    check(/Found 3 questions: 2 multiple choice, 1 problem solving/.test(pdfRes) && /Read from a PDF/.test(pdfRes), 'pdf file: questions, choices and answers read', pdfRes.slice(0, 200));
+    const pdfText = await ad.inputValue('#paste');
+    check(/x\s?2 when x = 3/.test(pdfText) && /B\. 9/.test(pdfText) && !/^\s*[12]\s*$/m.test(pdfText), 'pdf file: power kept on its line, side-by-side choices, page numbers dropped', JSON.stringify(pdfText.slice(0, 400)));
+    const pp = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), pdfText);
+    check(pp.items[1].choices.join('|') === '6|9|12|27' && pp.items[2].text.includes('show your solution clearly') && pp.items[2].answer === '60', 'pdf file: wrapped question text joined, answers right', JSON.stringify(pp.items.map((q) => [q.type, q.answer, q.choices.join('|'), q.text])));
+    await ad.screenshot({ path: out + '/a-pdf.png', fullPage: true });
+  } else console.log('SKIP pdf file test (put pdf.min.js and pdf.worker.min.js from pdfjs-dist@3.11.174 in test/vendor)');
   await ad.click('#back'); await ad.waitForTimeout(200);
 
   // ---------- students ----------

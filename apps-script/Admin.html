@@ -244,9 +244,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       "<code>Part I</code> / <code>Part II</code> where numbering starts again. Points and tolerance lines are optional. " +
       "In solutions, number steps as <code>Step 1</code> or <code>(1)</code>, not <code>1.</code>, so they are not mistaken for new questions. " +
       "Several accepted answers: <code>Answer: 0.5 | 1/2</code>.</p></details>" +
-      '<div class="btnrow" style="align-items:center;margin-top:12px"><label class="btn ghost small" style="cursor:pointer">📎 Choose a file (Word .docx or .txt)' +
-      '<input type="file" id="file" accept=".docx,.txt,.md,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>' +
-      '<span class="muted">The file is read into the box below and checked. From Google Docs: File > Download > Microsoft Word (.docx).</span></div>' +
+      '<div class="btnrow" style="align-items:center;margin-top:12px"><label class="btn ghost small" style="cursor:pointer">📎 Choose a file (Word, PDF or text)' +
+      '<input type="file" id="file" accept=".docx,.pdf,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></label>' +
+      '<span class="muted">The file is read into the box below and checked. Word keeps equations best; PDF math comes out as plain text. From Google Docs: File > Download > Microsoft Word (.docx).</span></div>' +
       '<label class="field" style="margin-top:12px">Paste here<textarea id="paste" placeholder="1. Question…&#10;A. …&#10;B. …&#10;Answer: B"></textarea></label>' +
       '<div class="btnrow" style="align-items:flex-end;margin-top:8px">' +
       '<label class="field">Points, multiple choice<input type="number" min="0" step="any" id="d-mc" value="1" style="width:120px"></label>' +
@@ -359,10 +359,10 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       var f = this.files[0];
       this.value = "";
       if (!f) return;
-      var isDocx = /\.docx$/i.test(f.name);
-      if (!isDocx && !/\.(txt|md)$/i.test(f.name) && f.type !== "text/plain") return toast("Choose a Word (.docx) or text (.txt) file. For a .doc or PDF, open it in Word or Google Docs and save it as .docx.", true);
+      var isDocx = /\.docx$/i.test(f.name), isPdf = /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+      if (!isDocx && !isPdf && !/\.(txt|md)$/i.test(f.name) && f.type !== "text/plain") return toast("Choose a Word (.docx), PDF or text (.txt) file. For an old .doc file, open it in Word and save it as .docx.", true);
       toast("Reading " + f.name + "…");
-      (isDocx ? f.arrayBuffer().then(docxToText) : f.text().then(function (t) { return { text: t, notes: [] }; })).then(function (r) {
+      (isDocx ? f.arrayBuffer().then(docxToText) : isPdf ? f.arrayBuffer().then(pdfToText) : f.text().then(function (t) { return { text: t, notes: [] }; })).then(function (r) {
         g("paste").value = r.text;
         fileNotes = r.notes;
         readPasted();
@@ -619,6 +619,83 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   }
   window.__docxLines = docxLines; // for testing
 
+  // ---------- reading a PDF ----------
+  // pdf.js (Mozilla's PDF reader) is loaded the first time a PDF is chosen. A PDF only stores where each piece of
+  // text is drawn, so lines are rebuilt from their positions; page numbers are dropped.
+  var PDFJS = ["https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/", "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/"];
+  var pdfLib = null;
+  function loadPdfJs(i) {
+    i = i || 0;
+    if (pdfLib) return pdfLib;
+    if (i >= PDFJS.length) return Promise.reject(new Error("the PDF reader could not be loaded. Check your internet connection and try again"));
+    var p = new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = PDFJS[i] + "pdf.min.js";
+      s.onload = function () { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS[i] + "pdf.worker.min.js"; resolve(window.pdfjsLib); };
+      s.onerror = function () { s.remove(); reject(); };
+      document.head.appendChild(s);
+    });
+    pdfLib = p.catch(function () { pdfLib = null; return loadPdfJs(i + 1); });
+    return pdfLib;
+  }
+  function pdfToText(buf) {
+    return loadPdfJs().then(function (lib) {
+      return lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
+    }).then(function (pdf) {
+      var pages = [];
+      for (var i = 1; i <= pdf.numPages; i++) pages.push(pdf.getPage(i).then(function (pg) { return pg.getTextContent(); }));
+      return Promise.all(pages);
+    }).then(function (contents) {
+      var lines = [], chars = 0;
+      contents.forEach(function (tc) {
+        var rows = [];
+        tc.items.forEach(function (it) {
+          if (it.str === undefined || it.str === "") return;
+          var x = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || it.height || 10;
+          // same line if the baselines are close; small raised text (powers like x²) joins the line it sits on
+          var row = rows.filter(function (r) { return Math.abs(r.y - y) < Math.max(r.h, h) * 0.55; })[0];
+          if (!row) rows.push(row = { y: y, h: h, items: [] });
+          else if (h > row.h) { row.h = h; row.y = y; }
+          row.items.push({ x: x, w: it.width || 0, s: it.str, h: h });
+        });
+        rows.sort(function (a, b) { return b.y - a.y; });
+        var right = 0;
+        rows.forEach(function (r) { r.items.forEach(function (it) { right = Math.max(right, it.x + it.w); }); });
+        var prevY = null, prevH = 0, prevFull = false;
+        var START = /^\s*(\*?\(?[A-Ha-h][.)]\s|\(?\d{1,3}[.):]\s|(answer|ans|solution|sol|explanation|points?|pts|tol(erance)?|key)\s*([:=\-–]|\.?\s*$)|part\s|test\s|[IVX]{1,5}\.\s)/i;
+        rows.forEach(function (r) {
+          r.items.sort(function (a, b) { return a.x - b.x; });
+          var t = "", end = null;
+          r.items.forEach(function (it) {
+            if (end !== null) {
+              var gap = it.x - end;
+              if (gap > it.h * 0.12 && !/\s$/.test(t) && !/^\s/.test(it.s)) t += gap > it.h * 1.5 ? "   " : " ";
+            }
+            t += it.s;
+            end = it.x + it.w;
+          });
+          t = t.replace(/\s+$/, "");
+          if (/^\s*(page\s*)?\d{1,3}(\s*(of|\/)\s*\d{1,3})?\s*$/i.test(t)) return;   // page numbers
+          var gapBefore = prevY !== null && prevY - r.y > Math.max(prevH, r.h) * 1.9;
+          if (gapBefore) lines.push("");  // a gap between paragraphs
+          // a line that reached the right margin was wrapped by the page width: join the next line onto it
+          if (!gapBefore && prevFull && lines.length && lines[lines.length - 1] && !START.test(t)) lines[lines.length - 1] += " " + t.trim();
+          else lines.push(t);
+          var lineEnd = r.items.length ? r.items[r.items.length - 1].x + r.items[r.items.length - 1].w : 0;
+          prevFull = lineEnd > right * 0.85;
+          chars += t.trim().length;
+          prevY = r.y; prevH = r.h;
+        });
+        lines.push("");
+      });
+      if (!chars) throw new Error("this PDF has no text that can be selected (it is probably a scanned image). Use the original Word file, or type or paste the questions");
+      return {
+        text: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim(),
+        notes: ["Read from a PDF. Check every question in the preview: math such as powers and fractions comes out as plain text (x² may appear as x2), and pictures are not imported."]
+      };
+    });
+  }
+
   // ---------- reading pasted questions ----------
   function parsePaste(text, def) {
     var lines = String(text).replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ").split("\n");
@@ -627,7 +704,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var reQ = /^(?:(?:Q|No\.?|Item|Problem|Question)\s*)?(\d{1,3})(?:[.:]\s+|\)\s*|\s*[.:]$)(.*)$/i;
     var reChoice = /^(\*?)\s*\(?([A-Ha-h])(?:[.)]\s+|\)\s*)(.*)$/;
     var reAns = /^(?:answer|ans|correct\s*answer|key)\s*[:=.\-]\s*(.+)$/i;
-    var reSol = /^(?:solution|sol|explanation|solutions?\s*and\s*answers?)\s*[:.\-]?\s*(.*)$/i;
+    // "Solution:" / "Solution -" with text after it, or the word alone; not a sentence that starts with "solution"
+    var reSol = /^(?:solution|sol\.?|explanation|solutions?\s*and\s*answers?)\s*(?:[:\-–]\s*(.*)|\.?\s*)$/i;
     var rePts = /^(?:points?|pts)\s*[:=]\s*([\d.]+)\s*(?:pts?|points?)?$/i;
     var reTol = /^tol(?:erance)?\s*(?:%|\(%\))?\s*[:=]\s*([\d.]+)\s*%?$/i;
     var reKeyHead = /^(?:answer\s*key|answers|key\s*to\s*corrections?|answer\s*sheet|correct\s*answers)\s*:?$/i;

@@ -14,7 +14,7 @@ Script web app open only to **@rtu.edu.ph** accounts.
 | Tab | What you do there |
 |---|---|
 | 📋 Overview | See what is open now and how many students are taking an exam |
-| 📝 Exams | Create an exam per subject. **Paste** multiple-choice and problem-solving questions, answers and solutions, or **choose a Word (.docx) or text file** and it is read in for you (Word's automatic numbering and equations are kept); check the preview, then save. Set the opening and closing times, time limit, block sections, auto-submit rule, shuffling, and when solutions are shown. |
+| 📝 Exams | Create an exam per subject. **Paste** multiple-choice and problem-solving questions, answers and solutions, or **choose a Word (.docx), PDF or text file** and it is read in for you (Word keeps its automatic numbering and equations; from a PDF, math comes out as plain text); check the preview, then save. Set the opening and closing times, time limit, block sections, auto-submit rule, shuffling, and when solutions are shown. |
 | 📊 Results | Every enrolled student's status, auto score, tab-switch count and time away (updates every 20 s). Open a student to see each answer, their written solutions and the activity log. Give a final score and remarks, allow a retake, re-grade after fixing a key, download CSV. |
 | 🧑‍🎓 Class list | Paste your **record book** link, choose the tabs, import. Tab `MMW - CEIT-03-101E` gives subject MMW and that block section; a tab like `CAL00` gives the subject, and its `YEAR AND SECTION:` cell gives the block section. Student numbers in column A, the name in the next filled cell. Tick **Blocked** to stop a student. **Remove** one student, or filter (for example by subject) and remove everyone shown; **Add a student** by hand. |
 | ⚙️ Settings | The web app address, site title, instructor name |
@@ -45,8 +45,10 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
   numbering starts again. Several accepted answers: `Answer: 0.5 | 1/2`.
 - Number the steps of a solution as `Step 1` or `(1)`, not `1.`, so they are not read as new questions.
 - Math is LaTeX between `$ … $` and is shown rendered to students.
-- From a file: Word (.docx) or plain text. From Google Docs, use **File > Download > Microsoft Word (.docx)**. Pictures
-  are not imported (the admin site tells you how many were skipped).
+- From a file: Word (.docx), PDF or plain text. Word works best: equations become math. From a PDF the text, numbering
+  and choices are read, but math comes out as plain text (x² may appear as x2), so check the preview; a scanned PDF
+  (a picture of the page) has no text to read. From Google Docs, use **File > Download > Microsoft Word (.docx)**.
+  Pictures are not imported. Files are read in your browser and are not uploaded anywhere.
 
 ### Tab-switch detection
 Switching tabs, minimising, clicking into another window or app, leaving fullscreen (when the browser allows
@@ -93,7 +95,8 @@ apps-script/Student.html  Student site: exam list, exam with tab-switch detectio
 apps-script/Admin.html    Admin site
 apps-script/Styles.html   Maroon and Gold styles (shared with the online modules)
 img/                      Icons and the university seal
-test/                     Local test kit (fake Google services + browser test); not part of the deployment
+test/                     Local test kit (fake Google services + browser test); not part of the deployment.
+                          For the PDF test, put pdf.min.js and pdf.worker.min.js from pdfjs-dist@3.11.174 in test/vendor/
 ```
 
 All data lives in the Google Sheet: **Exams**, **Questions** (answer keys and solutions), **Class List**, **Attempts**
