@@ -675,10 +675,15 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
             return '<div class="part-edit"><b>' + String.fromCharCode(97 + j) + ')</b><span style="flex:2 1 220px">' + rich(pt.t) + "</span>" +
               '<label class="field" style="flex:1 1 160px">Answer <input type="text" data-ppa="' + i + ":" + j + '" value="' + esc(pt.a) + '"></label>' +
               '<label class="field" style="flex:0 0 80px">Points <input type="number" min="0" step="any" data-ppp="' + i + ":" + j + '" value="' + esc(pt.p) + '"></label></div>';
-          }).join("") + '<label class="field">Solution <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
+          }).join("") +
+          '<div class="btnrow" style="margin:4px 0"><button class="btn small ghost" data-punsplit="' + i + '">Back to one answer</button></div>' +
+          '<label class="field">Solution <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
         else if (q.type === "PS") ans = '<div class="form-grid"><label class="field">Answer <input type="text" data-pans="' + i + '" value="' + esc(q.answer) + '" placeholder="e.g. 20.4 or 3/8 or x^2 + C"></label>' +
           '<label class="field">Tolerance % <input type="number" min="0" step="any" data-ptol="' + i + '" value="' + esc(q.tol) + '"></label></div>' +
-          '<label class="field">Solution <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
+          '<label class="field">Solution <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>" +
+          (/^\s*\(?[a-hA-H][.)]\s*\S/m.test(q.text) && (q.text.match(/^\s*\(?[a-hA-H][.)]\s*\S/gm) || []).length >= 2
+            ? '<div class="notice" style="margin:8px 0 0">This problem has sub-questions (a, b …) but one answer. To give each sub-question its own answer and points, click <b>Split into parts</b>.</div>' : "") +
+          '<div class="btnrow" style="margin:6px 0 0"><button class="btn small ghost" data-psplit="' + i + '">Split into parts (a, b, c …)</button></div>';
         else ans = '<label class="field">Guide or model answer (optional) <textarea data-psol="' + i + '" style="min-height:60px">' + esc(q.solution) + "</textarea></label>";
         html = '<div class="rendered">' + html + '</div><div class="p-answer">' + ans + "</div>";
         return '<div class="qedit' + (w.length ? " warn" : "") + '" data-pcard="' + i + '"><div class="qe-head"><b>#' + (i + 1) + "</b>" +
@@ -739,6 +744,19 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         var again = box.querySelector('[data-pans="' + i + '"]');
         if (again) window.scrollBy(0, again.getBoundingClientRect().top - y);
       };
+    });
+    var keepPlace = function (sel, fn) {   // re-draw the preview, keeping the question at the same place on screen
+      var card = sel.replace(/data-p(un)?split/, "data-pcard"), el = box.querySelector(card), y = el ? el.getBoundingClientRect().top : 0;
+      fn();
+      showParsed();
+      var again = box.querySelector(card);
+      if (again) window.scrollBy(0, again.getBoundingClientRect().top - y);
+    };
+    box.querySelectorAll("[data-psplit]").forEach(function (b) {
+      b.onclick = function () { var i = Number(b.dataset.psplit); keepPlace('[data-psplit="' + i + '"]', function () { splitIntoParts(p.items[i], defPts("PS")); }); };
+    });
+    box.querySelectorAll("[data-punsplit]").forEach(function (b) {
+      b.onclick = function () { var i = Number(b.dataset.punsplit); keepPlace('[data-punsplit="' + i + '"]', function () { var q = p.items[i]; var pts = partsTotal(q); joinParts(q); q.points = pts; }); };
     });
     box.querySelectorAll("[data-ppa]").forEach(function (el) {
       var k = el.dataset.ppa.split(":");
@@ -1121,7 +1139,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var reTypeHead = /^(?:multiple[\s-]*choice|identification|fill[\s-]*in[\s-]*the[\s-]*blanks?|short[\s-]*answer|essay|problem[\s-]*solving|computation)\b[^?]{0,100}$/i;
     var reType = /^type\s*[:\-–]\s*(.+)$/i;
     var reRubric = /^(?:rubric|guide|criteria|scoring\s*guide|model\s*answer)\s*(?:[:\-–]\s*(.*)|\.?\s*)$/i;
-    var partType = null;
+    var partType = null, prevBlank = true;
     function typeOf(t) {
       t = String(t);
       if (/multiple[\s-]*choice/i.test(t)) return "MC";
@@ -1168,6 +1186,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     lines.forEach(function (raw) {
       var line = raw.replace(/\t/g, "  ");
       var t = line.trim();
+      var afterBlank = prevBlank;   // a heading after an empty line ends a solution
+      prevBlank = !t;
       // "Answer:" (or "Answers:" under a question with parts) alone on a line, with the answers on the next lines
       if (cur && mode === "q" && field === "ansblock") {
         var am = t.match(/^\(?([a-hA-H])[.)]\s*(.+)$/);
@@ -1199,8 +1219,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         if (solCur) solCur[1].push(line.replace(/\s+$/, ""));
         return;
       }
-      if (rePart.test(t) && !(cur && field === "sol")) { finish(); partType = typeOf(t); return; }
-      if (reTypeHead.test(t) && !(cur && field === "sol")) { finish(); partType = typeOf(t); return; }
+      if (rePart.test(t) && !(cur && field === "sol" && !afterBlank)) { finish(); partType = typeOf(t); return; }
+      if (reTypeHead.test(t) && !(cur && field === "sol" && !afterBlank)) { finish(); partType = typeOf(t); return; }
       if (cur && reType.test(t)) { cur.typeHint = typeOf(t.match(reType)[1]) || (/^\s*(mc|id|ps|es)\s*$/i.test(t.match(reType)[1]) ? t.match(reType)[1].trim().toUpperCase() : null); return; }
       if (cur && reRubric.test(t) && field !== "sol") { field = "sol"; cur.rubric = true; var rr = t.match(reRubric)[1]; if (rr) cur.sol.push(rr); return; }
       if (cur && reAns.test(t)) {

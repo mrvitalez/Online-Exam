@@ -144,6 +144,9 @@ Answer key
   check(PP.items[1].parts.map((x) => x.a).join('|') === '36|\\frac{1}{6}' && PP.items[1].text === 'Two dice are rolled.', 'paste: one answer line for all parts (with LaTeX)', JSON.stringify(PP.items[1]));
   check(PP.items[2].parts.map((x) => x.a).join('|') === 'north|50 m|36' && PP.items[2].solution === 'd = vt' && PP.items[2].parts.every((x) => x.p === 2), 'paste: "Answers:" list of part answers, points shared equally', JSON.stringify(PP.items[2]));
   check(!PP.items[3].parts && PP.items[3].answer === '1/6' && /a\) list the outcomes/.test(PP.items[3].text), 'paste: one overall answer keeps a) b) lines inside the question');
+  const PH = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }),
+    'Part I. Problem solving\n1. Add 2 and 2.\nAnswer: 4\nSolution: 2 + 2 = 4\n\nPart II. Essay\n1. Explain addition.');
+  check(PH.items.length === 2 && PH.items[0].solution === '2 + 2 = 4' && PH.items[1].type === 'ES', 'paste: a Part heading after a solution starts the next part', JSON.stringify(PH.items.map((q) => [q.type, q.solution])));
   const PK = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }), '1. Pick y\nA. x\nB. y\n2. Pick x\nA. x\nB. y\nAnswers\n1. B\n2. A');
   check(PK.items.length === 2 && PK.items.map((q) => q.answer).join('') === 'BA', 'paste: an "Answers" key section after questions with choices still works', JSON.stringify(PK.items.map((q) => q.answer)));
   const P2 = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, ps: 5, tol: 1 }), '1) What is 2+2?\n(a) 3\n(b) 4\nAns: b\n\n2. Velocity after 3 s from rest at 2 m/s²?\nAnswer: 6 m/s\nSolution: v = at\n1. wrong-looking step\n= 6 m/s');
@@ -387,7 +390,13 @@ Answer key
   await ad.click('[data-tab=exams]'); await ad.click('#new'); await ad.waitForTimeout(200);
   await ad.selectOption('#f-subject', 'MMW'); await ad.fill('#f-title', 'Quiz 3'); await ad.selectOption('#f-status', 'Published');
   await ad.fill('#paste', '1. A ball is thrown straight up at 20 m/s.\na) Find the maximum height in m.\nb) Find the time to reach it, in s.\nAnswer: 20.4\nSolution: v² = v0² − 2gh');
-  await ad.click('#read'); await ad.waitForTimeout(150); await ad.click('#p-add'); await ad.waitForTimeout(300);
+  await ad.click('#read'); await ad.waitForTimeout(150);
+  check(/has sub-questions/.test(await ad.textContent('[data-pcard="0"]')), 'preview: a problem with a) b) lines and one answer suggests splitting');
+  await ad.click('[data-psplit="0"]'); await ad.waitForTimeout(150);
+  check(await ad.inputValue('[data-ppa="0:0"]') === '20.4' && await ad.$('[data-ppa="0:1"]') !== null, 'preview: "Split into parts" gives each part its own answer box');
+  await ad.click('[data-punsplit="0"]'); await ad.waitForTimeout(150);
+  check(await ad.$('[data-ppa="0:0"]') === null && await ad.inputValue('[data-pans="0"]') === '20.4', 'preview: "Back to one answer" undoes the split');
+  await ad.click('#p-add'); await ad.waitForTimeout(300);
   await ad.click('#qlist [data-split="0"]'); await ad.waitForTimeout(200);
   check(await ad.inputValue('#qlist textarea[data-f="ptext"][data-j="1"]') === 'Find the time to reach it, in s.' && await ad.inputValue('#qlist input[data-f="pans"][data-j="0"]') === '20.4',
     'editor: "Split into parts" makes parts from a) b) lines and keeps the answer');

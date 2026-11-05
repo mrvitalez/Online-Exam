@@ -56,8 +56,8 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
 - **Problems with parts:** write the parts as `a)`, `b)` … lines and give each part its answer, in any of these ways:
   an `Answer:` line under each part; one line `Answer: a) 20.4  b) 2.04`; or `Answers:` followed by `a) 20.4`,
   `b) 2.04` lines. `(2 pts)` on a part sets its points; otherwise the problem's points are shared equally. A problem
-  with one overall answer keeps its `a)` `b)` lines as part of the question; use **Split into parts** in the editor to
-  give them separate answers.
+  with one overall answer keeps its `a)` `b)` lines as part of the question; click **Split into parts** (in the preview
+  or in the question list) to give them separate answers. `samples/sample-exam.docx` shows every format.
 - After **Read questions**, check every question in the preview: change its **type**, choose the **correct answer**
   (multiple choice) or type the **accepted answers**, answer, tolerance and solution, and set its **points**. All of
   this can also be changed later in the question list.
