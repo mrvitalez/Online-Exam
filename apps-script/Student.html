@@ -36,6 +36,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   var HOME = BOOT.home || null;
 
   // exam state
+  var photos = {}, thumbs = {};   // uploaded photo IDs by question; pictures uploaded on this page
   var exam = null, answers = {}, deadline = 0, clockOffset = 0, departures = 0, dirty = false;
   var monitoring = false, done = false, away = false, fullscreenWorks = false, timerId = 0, saveId = 0;
 
@@ -137,7 +138,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     block("Drafts (only you can see these)", groups.draft);
     if (!h.exams.length) html = '<section class="ch"><h2>No exams yet</h2><p>There are no exams for your subjects right now. Check again later.</p></section>';
     view.innerHTML = html;
-    view.querySelectorAll("[data-start]").forEach(function (b) { b.onclick = function () { confirmStart(b.dataset.start); }; });
+    view.querySelectorAll("[data-start]").forEach(function (b) { b.onclick = function () { confirmStart(b.dataset.start, b.dataset.set); }; });
     view.querySelectorAll("[data-review]").forEach(function (b) { b.onclick = function () { openReview(b.dataset.review, b); }; });
     typeset(view);
   }
@@ -154,7 +155,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         (x.pending && (x.final === "" || x.final == null) ? ' <span class="muted">(essays not checked yet)</span>' : "");
       if (x.canReview) right += ' <button class="btn small ghost" data-review="' + esc(x.id) + '">Review answers</button>';
     } else if (x.canStart) {
-      right += '<button class="btn" data-start="' + esc(x.id) + '">' + (a ? "Continue exam" : "Start exam") + "</button>";
+      if (x.sets && HOME.admin && !a) right += '<button class="btn" data-start="' + esc(x.id) + '" data-set="A">Preview Set A</button> <button class="btn ghost" data-start="' + esc(x.id) + '" data-set="B">Preview Set B</button>';
+      else right += '<button class="btn" data-start="' + esc(x.id) + '">' + (a ? "Continue exam" : "Start exam") + "</button>";
     } else if (x.state === "upcoming") {
       right += '<span class="pill">Not open yet</span>';
     } else if (x.state === "closed") {
@@ -171,24 +173,25 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   }
 
   // ---------------- start ----------------
-  function confirmStart(id) {
+  function confirmStart(id, set) {
     var x = HOME.exams.filter(function (e) { return e.id === id; })[0];
     var text = "Time limit: " + x.limit + " minutes. The timer starts now and keeps running even if you close the page.\n\n" +
       "Stay on this page until you submit. Switching tabs, opening another window or app, or leaving fullscreen is recorded." +
       (x.maxLeave ? "\nAfter leaving the page " + x.maxLeave + " time" + (x.maxLeave > 1 ? "s" : "") + ", your exam is submitted automatically." : "");
-    overlay(x.title, text, x.attempt ? "Continue exam" : "Start exam", function () { start(id); }, true);
+    overlay(x.title, text, x.attempt ? "Continue exam" : "Start exam", function () { start(id, set); }, true);
   }
-  function start(id) {
+  function start(id, set) {
     goFullscreen(true);  // must be inside the click
     view.innerHTML = '<div class="loading"><div class="spinner"></div>Opening the exam…</div>';
-    call("api_start", id).then(function (d) {
+    call("api_start", id, set || "").then(function (d) {
       if (d.done) { toast(d.message); return reloadHome(); }
-      exam = d.exam; answers = d.state.answers || {}; deadline = d.state.deadline; departures = d.state.departures;
+      exam = d.exam; answers = d.state.answers || {}; deadline = d.state.deadline; departures = d.state.departures; photos = d.state.photos || {};
       clockOffset = d.state.serverNow - Date.now(); done = false; away = false; dirty = false;
       showHero(false);
-      $("#et-title").textContent = exam.subject + " · " + exam.title;
+      $("#et-title").textContent = exam.subject + " · " + exam.title + (exam.set ? " · Set " + exam.set : "");
       $("#et-who").textContent = d.student.name + (d.student.no && d.student.no !== "PREVIEW" ? " · " + d.student.no : "") + " · " + d.student.section;
       renderExam();
+      Object.keys(photos).forEach(drawPhotos);
       updateBadge();
       clearInterval(timerId); timerId = setInterval(tick, 500); tick();
       clearInterval(saveId); saveId = setInterval(autosave, 20000);
@@ -223,7 +226,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           '<div class="tb-row"><span class="tb-tag">Symbols</span>' + SYMS.map(function (s) { return '<button type="button" class="sym" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div>" +
           '<div class="tb-row"><span class="tb-tag">Math</span>' + TEX.map(function (s) { return '<button type="button" class="sym tex" data-latex="1" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div></div>" +
           '<textarea class="sol-input essay" data-essay="' + esc(q.id) + '" maxlength="8000" style="min-height:220px;font-family:inherit;font-size:1rem">' + esc(answers[q.id] || "") + "</textarea>" +
-          '<div class="sol-preview-wrap"><div class="muted">Preview (math shown as it will look)</div><div class="sol-preview"></div></div></div>';
+          '<div class="sol-preview-wrap"><div class="muted">Preview (math shown as it will look)</div><div class="sol-preview"></div></div></div>' + photoBox(q);
       } else {
         var a = answers[q.id] || {};
         var hint = '<span class="muted">A number, an exact value (3/8, \\frac{3}{8}, \\sqrt{2}, 3.2\\times10^{5}) or a word. Units are optional.</span>';
@@ -243,7 +246,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           '<div class="tb-row"><span class="tb-tag">Symbols</span>' + SYMS.map(function (s) { return '<button type="button" class="sym" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div>" +
           '<div class="tb-row"><span class="tb-tag">Math</span>' + TEX.map(function (s) { return '<button type="button" class="sym tex" data-latex="1" data-insert="' + esc(s[1]) + '">' + esc(s[0]) + "</button>"; }).join("") + "</div></div>" +
           '<textarea class="sol-input" data-sol="' + esc(q.id) + '" maxlength="6000" spellcheck="false">' + esc(a.s || "") + "</textarea>" +
-          '<div class="sol-preview-wrap"><div class="muted">Preview</div><div class="sol-preview"></div></div></div>';
+          '<div class="sol-preview-wrap"><div class="muted">Preview</div><div class="sol-preview"></div></div></div>' + photoBox(q);
       }
       html += "</section>";
     });
@@ -392,8 +395,91 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     // Google's frame may not allow fullscreen; then the exam carries on without it.
     el.requestFullscreen().then(function () { fullscreenWorks = true; }).catch(function () { if (first) fullscreenWorks = false; });
   }
+  // ---------------- photos of solutions ----------------
+  // Choosing a photo opens the camera or the file picker, which takes the student off the page. For up to 3 minutes
+  // that is logged as "in the photo picker" and does not count as leaving; after that it counts like any other time.
+  var PICK_MS = 180000, pickingSince = 0, photoAway = 0, pickTimer = 0;
+  function picking() { return pickingSince && Date.now() - pickingSince < PICK_MS; }
+  function photoBox(q) {
+    if (!exam.allowPhotos) return "";
+    return '<div class="photo-box"><div class="btnrow" style="align-items:center"><label class="btn small ghost photo-pick" style="cursor:pointer">📷 Add a photo of your solution' +
+      '<input type="file" accept="image/*" data-photo="' + esc(q.id) + '" hidden></label><span class="muted">Up to ' + exam.maxPhotos +
+      " photos. Opening the camera or your files will not count as leaving the page for up to 3 minutes; it is still recorded.</span></div>" +
+      '<div class="photo-list" data-photos="' + esc(q.id) + '"></div></div>';
+  }
+  function drawPhotos(qid) {
+    var box = view.querySelector('[data-photos="' + qid + '"]');
+    if (!box) return;
+    var list = photos[qid] || [];
+    box.innerHTML = list.map(function (id, n) {
+      return '<div class="photo-item">' + (thumbs[id] ? '<img src="' + thumbs[id] + '" alt="Photo ' + (n + 1) + '">' : '<span class="photo-done">📷 Photo ' + (n + 1) + " uploaded</span>") +
+        '<button type="button" class="btn small ghost" data-rmphoto="' + esc(id) + '" data-q="' + esc(qid) + '">Remove</button></div>';
+    }).join("");
+    var pick = box.parentNode.querySelector(".photo-pick");
+    if (pick) pick.style.display = list.length >= exam.maxPhotos ? "none" : "";
+  }
+  function shrinkPhoto(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file), im = new Image();
+      im.onload = function () {
+        URL.revokeObjectURL(url);
+        var scale = Math.min(1, 1600 / Math.max(im.naturalWidth, im.naturalHeight));
+        var c = document.createElement("canvas");
+        c.width = Math.round(im.naturalWidth * scale); c.height = Math.round(im.naturalHeight * scale);
+        var x = c.getContext("2d"); x.fillStyle = "#FFFFFF"; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+        var d = c.toDataURL("image/jpeg", 0.82);
+        if (d.length > 3500000) d = c.toDataURL("image/jpeg", 0.6);
+        resolve(d);
+      };
+      im.onerror = function () { URL.revokeObjectURL(url); reject(new Error("That file is not a photo this browser can read. Use a JPG or PNG picture.")); };
+      im.src = url;
+    });
+  }
+  function endPicking() { pickingSince = 0; clearTimeout(pickTimer); }
+  view.addEventListener("click", function (e) {
+    var inp = e.target.closest && e.target.closest("input[data-photo]");
+    if (inp && monitoring && !done) {
+      pickingSince = Date.now();
+      call("api_event", exam.id, "photo-open", "", null).catch(function () {});
+      clearTimeout(pickTimer);
+      pickTimer = setTimeout(function () {   // still away after 3 minutes: from now on it counts as leaving
+        var wasAway = photoAway;
+        pickingSince = 0; photoAway = 0;
+        if (wasAway) { call("api_event", exam.id, "photo-late", "", null).catch(function () {}); leave("stayed in the photo picker more than 3 minutes"); }
+      }, PICK_MS);
+    }
+    var rm = e.target.closest && e.target.closest("[data-rmphoto]");
+    if (rm) {
+      if (!confirm("Remove this photo?")) return;
+      rm.disabled = true;
+      call("api_removePhoto", exam.id, rm.dataset.q, rm.dataset.rmphoto).then(function (r) { photos[rm.dataset.q] = r.photos; drawPhotos(rm.dataset.q); })
+        .catch(function (err) { rm.disabled = false; toast(err.message, true); });
+    }
+  });
+  view.addEventListener("cancel", function (e) { if (e.target.dataset && e.target.dataset.photo !== undefined) endPicking(); }, true);
+  view.addEventListener("change", function (e) {
+    var inp = e.target;
+    if (!inp.dataset || inp.dataset.photo === undefined) return;
+    endPicking();
+    var f = inp.files[0], qid = inp.dataset.photo;
+    inp.value = "";
+    if (!f) return;
+    var box = view.querySelector('[data-photos="' + qid + '"]');
+    var wait = document.createElement("div"); wait.className = "muted"; wait.textContent = "Uploading the photo…"; box.appendChild(wait);
+    var data;
+    shrinkPhoto(f).then(function (d) { data = d; return call("api_uploadPhoto", exam.id, qid, d); }).then(function (r) {
+      if (r.submitted) return finish({}, "Time is up. Your answers were submitted.");
+      photos[qid] = r.photos; thumbs[r.photos[r.photos.length - 1]] = data; drawPhotos(qid);
+      toast("Photo added.");
+    }).catch(function (err) { wait.remove(); toast("Could not add the photo: " + err.message, true); });
+  });
+
   function leave(detail) {
     if (!monitoring || done || away) return;
+    if (picking()) {   // in the camera or file picker: recorded, not counted
+      if (!photoAway) { photoAway = Date.now(); call("api_event", exam.id, "photo-away", "", null).catch(function () {}); }
+      return;
+    }
     away = true; dirty = false;
     call("api_event", exam.id, "left", detail, answers).then(function (d) {
       if (d.departures !== undefined) { departures = d.departures; updateBadge(); }
@@ -401,6 +487,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     }).catch(function () {});
   }
   function comeBack() {
+    if (photoAway && monitoring && !done) {
+      var secs = Math.round((Date.now() - photoAway) / 1000);
+      photoAway = 0;
+      call("api_event", exam.id, "photo-back", secs + "s", null).catch(function () {});
+      setTimeout(endPicking, 1500);   // the picker is closed: leaving again counts as usual
+    }
     if (!monitoring || done || !away) return;
     away = false;
     call("api_event", exam.id, "returned", "", null).then(function (d) {
@@ -445,7 +537,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     call("api_review", id).then(function (r) {
       showHero(true);
       $("#hello").textContent = r.title;
-      $("#lead").textContent = r.subject + " · Score: " + (r.final !== "" ? r.final + " / " + r.total + " (final, set by your instructor)" :
+      $("#lead").textContent = r.subject + (r.set ? " · Set " + r.set : "") + " · Score: " + (r.final !== "" ? r.final + " / " + r.total + " (final, set by your instructor)" :
         r.score + " / " + r.total + (r.pending ? " (essays not checked yet)" : ""));
       var html = (r.remarks ? '<div class="notice"><b>Instructor remarks:</b> ' + esc(r.remarks) + "</div>" : "");
       r.questions.forEach(function (q) {

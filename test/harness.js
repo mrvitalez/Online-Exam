@@ -112,6 +112,7 @@ function formatDate(d, tz, fmt) {
   const m = new RealDate(d.getTime() + MANILA);
   const Y = m.getUTCFullYear(), M = m.getUTCMonth(), D = m.getUTCDate(), h = m.getUTCHours(), mi = m.getUTCMinutes();
   if (fmt === "yyyy-MM-dd'T'HH:mm") return `${Y}-${pad(M + 1)}-${pad(D)}T${pad(h)}:${pad(mi)}`;
+  if (fmt === 'yyyy-MM-dd HH.mm.ss') return `${Y}-${pad(M + 1)}-${pad(D)} ${pad(h)}.${pad(mi)}.${pad(m.getUTCSeconds())}`;
   if (fmt === "MMMM d, yyyy 'at' h:mm a") return `${MONTHS[M]} ${D}, ${Y} at ${h % 12 || 12}:${pad(mi)} ${h < 12 ? 'AM' : 'PM'}`;
   throw new Error('Unsupported date format in fake: ' + fmt);
 }
@@ -120,6 +121,27 @@ function parseDate(t, tz, fmt) {
   const [d, hm] = t.split('T'); const [Y, M, D] = d.split('-').map(Number); const [h, mi] = hm.split(':').map(Number);
   return new FakeDate(RealDate.UTC(Y, M - 1, D, h, mi) - MANILA);
 }
+
+// Google Drive (photos of solutions)
+const drive = { files: {}, folders: [] };
+function makeFolder(name, parent) {
+  const f = strict({
+    _name: name, _parent: parent,
+    getName: () => name,
+    getFoldersByName: (n) => iter(drive.folders.filter((x) => x._parent === f && x._name === n)),
+    createFolder: (n) => { const c = makeFolder(n, f); drive.folders.push(c); return c; },
+    createFile: (blob) => {
+      const id = 'FILE' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+      const file = strict({ getId: () => id, getBlob: () => blob, setTrashed: (t) => { file._trashed = t; return file; }, _folder: f, _blob: blob, _trashed: false });
+      drive.files[id] = file;
+      return file;
+    },
+  });
+  return f;
+}
+const iter = (list) => { let i = 0; return strict({ hasNext: () => i < list.length, next: () => list[i++] }); };
+const driveRoot = makeFolder('My Drive', null);
+const makeBlob = (bytes, type, name) => strict({ getBytes: () => bytes, getContentType: () => type, getName: () => name });
 
 const ctx = vm.createContext({
   console, JSON, Math, Object, String, Number, Array, RegExp, Error, TypeError, isFinite, isNaN, parseFloat, Date: FakeDate,
@@ -140,7 +162,15 @@ const ctx = vm.createContext({
   }) }),
   LockService: strict({ getScriptLock: () => strict({ waitLock() {}, tryLock: () => true, releaseLock() {} }) }),
   Session: strict({ getActiveUser: () => strict({ getEmail: () => currentEmail }) }),
-  Utilities: strict({ getUuid: () => crypto.randomUUID(), formatDate, parseDate }),
+  Utilities: strict({ getUuid: () => crypto.randomUUID(), formatDate, parseDate,
+    newBlob: (bytes, type, name) => makeBlob(bytes, type, name),
+    base64Decode: (s) => Array.from(Buffer.from(s, 'base64')).map((b) => (b > 127 ? b - 256 : b)),
+    base64Encode: (bytes) => Buffer.from(bytes.map((b) => (b < 0 ? b + 256 : b))).toString('base64') }),
+  DriveApp: strict({
+    getFoldersByName: (n) => iter(drive.folders.filter((x) => x._parent === driveRoot && x._name === n)),
+    createFolder: (n) => driveRoot.createFolder(n),
+    getFileById: (id) => { if (!drive.files[id]) throw new Error('No item with the given ID'); return drive.files[id]; },
+  }),
   ScriptApp: strict({
     getProjectTriggers: () => triggers, deleteTrigger: (t) => triggers.splice(triggers.indexOf(t), 1), newTrigger: () => strict({}, ['timeBased', 'everyMinutes', 'create']),
     getService: () => strict({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }),
@@ -191,4 +221,4 @@ const server = http.createServer((req, res) => {
   res.end('<!doctype html><html><head><meta charset="utf-8"></head>' + html + '</html>');
 });
 
-module.exports = { triggers, server, ctx, ss, store, cache, books, makeBook, as, ADMIN, setClock: (ms) => { clock = ms; } };
+module.exports = { drive, triggers, server, ctx, ss, store, cache, books, makeBook, as, ADMIN, setClock: (ms) => { clock = ms; } };

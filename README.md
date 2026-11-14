@@ -62,6 +62,24 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
   (multiple choice) or type the **accepted answers**, answer, tolerance and solution, and set its **points**. All of
   this can also be changed later in the question list.
 
+### Set A and Set B
+- In the exam settings, tick **Two sets (Set A and Set B)**. Each question then has a **Set** choice: Both sets, Set A
+  or Set B. Pasted questions under a `Set A` / `Set B` heading are marked automatically.
+- Students get a set by alternating down the class list in each block section (1st A, 2nd B, 3rd A …). In **Results**,
+  the Set column shows each student's set; before a student starts, you can give them the other set there.
+- Each student sees, and is graded on, only their set. Results, the review and the CSV show the set.
+- As the instructor, the student link shows **Preview Set A** and **Preview Set B**.
+
+### Photos of solutions
+- In the exam settings, tick **Students may upload photos of their solutions**. Problem-solving and essay questions
+  then have **📷 Add a photo of your solution** (up to 3 photos per question).
+- Opening the camera or the file picker takes the student off the exam page. For up to 3 minutes this is recorded in
+  the activity log ("in the photo picker") but does not count as leaving the page; after 3 minutes, or once the picker
+  is closed, leaving counts as usual.
+- Photos are saved in your Google Drive, in **Online Exam Photos**, one folder per exam, named with the student number
+  and question. In **Results**, open a student and click **📷 Show photos**, then give the points for that question.
+- The first time, Google asks you to allow Drive access: run **setup** once from the Apps Script editor after updating.
+
 ### Pictures
 - In the question list, click **🖼 Add picture** on a question, or paste a copied picture (Ctrl+V) into the question
   box. The picture appears where its `[image:…]` tag is; move the tag onto a choice's line to show the picture in that

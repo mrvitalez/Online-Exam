@@ -16,6 +16,7 @@ var CONFIG = {
   DOMAIN: 'rtu.edu.ph',
   TZ: 'Asia/Manila',
   PAGES_URL: 'https://mrvitalez.github.io/Online-Exam/',
+  PHOTO_FOLDER: 'Online Exam Photos',   // Google Drive folder for photos of students' solutions
   ICON_STUDENT: 'https://raw.githubusercontent.com/mrvitalez/Online-Exam/main/img/icon-student.png',
   ICON_ADMIN: 'https://raw.githubusercontent.com/mrvitalez/Online-Exam/main/img/icon-admin.png',
   LOGO: 'https://raw.githubusercontent.com/mrvitalez/Online-Exam/main/img/rtu-logo.jpg'
@@ -29,15 +30,19 @@ var IMG_PART = 45000;
 var IMG_MAX = 1500000;   // characters of one picture (about 1.1 MB); the admin site shrinks pictures well below this
 var EXAM_HEAD = ['Exam ID', 'Subject', 'Title', 'Status', 'Opens', 'Closes', 'Time Limit (min)', 'Block Sections',
                  'Auto-submit After Leaving', 'Shuffle Questions', 'Shuffle Choices', 'Block Copy/Paste',
-                 'Show Score After Submitting', 'Show Solutions', 'Instructions', 'Updated'];
-var Q_HEAD = ['Exam ID', 'Question ID', 'No.', 'Type', 'Question', 'Choices', 'Answer', 'Tolerance %', 'Points', 'Solution'];
+                 'Show Score After Submitting', 'Show Solutions', 'Instructions', 'Updated', 'Two Sets (A and B)',
+                 'Set Changes (JSON)', 'Photo Uploads'];
+var Q_HEAD = ['Exam ID', 'Question ID', 'No.', 'Type', 'Question', 'Choices', 'Answer', 'Tolerance %', 'Points', 'Solution', 'Set'];
 var CLASS_HEAD = ['Student No.', 'Name', 'Subject', 'Block and Section', 'Email', 'Blocked'];
 var ATT_HEAD = ['Attempt ID', 'Exam ID', 'Subject', 'Exam', 'Email', 'Student No.', 'Name', 'Block and Section', 'Status',
                 'Started', 'Deadline', 'Submitted', 'How Submitted', 'Score', 'Total', 'Final Score', 'Remarks',
-                'Times Left Page', 'Seconds Away', 'Answers (JSON)', 'Item Results (JSON)', 'Events (JSON)', 'Points Given (JSON)'];
+                'Times Left Page', 'Seconds Away', 'Answers (JSON)', 'Item Results (JSON)', 'Events (JSON)', 'Points Given (JSON)', 'Set',
+                'Photos (JSON)'];
 var AC = { ID: 1, EXAM: 2, SUBJECT: 3, TITLE: 4, EMAIL: 5, NO: 6, NAME: 7, SECTION: 8, STATUS: 9, STARTED: 10,
            DEADLINE: 11, SUBMITTED: 12, HOW: 13, SCORE: 14, TOTAL: 15, FINAL: 16, REMARKS: 17, LEFT: 18, AWAY: 19,
-           ANSWERS: 20, ITEMS: 21, EVENTS: 22, MANUAL: 23 };
+           ANSWERS: 20, ITEMS: 21, EVENTS: 22, MANUAL: 23, SET: 24, PHOTOS: 25 };
+var MAX_PHOTOS = 3;           // photos per question
+var PHOTO_MAX = 4000000;      // characters of one uploaded photo (about 3 MB); the student page shrinks photos first
 // Question types: multiple choice, problem solving (final answer + solution), identification (short answer), essay
 var TYPES = ['MC', 'PS', 'ID', 'ES'];
 var DEFAULT_SETTINGS = [
@@ -123,7 +128,8 @@ function api_home() {
     var st = examState_(x, now);
     var item = {
       id: x.id, subject: x.subject, title: x.title, state: st, opens: x.opens, closes: x.closes, limit: x.limit,
-      count: questions_(x.id).length, preview: admin && x.status !== 'Published', maxLeave: x.maxLeave,
+      count: admin ? questions_(x.id).length : examForSet_(Object.assign({ questions: questions_(x.id) }, x), setFor_(x, email)).questions.length,
+      preview: admin && x.status !== 'Published', maxLeave: x.maxLeave, sets: x.sets, allowPhotos: x.allowPhotos,
       attempt: att ? { status: att.status, submitted: att.submitted } : null
     };
     if (att && att.status === STATUS_DONE) {
@@ -144,11 +150,12 @@ function api_home() {
 }
 
 /** Start or resume an exam. The timer starts on the first call. */
-function api_start(examId) {
+function api_start(examId, previewSet) {
   var email = requireRtu_();
   var admin = isAdmin_(email);
-  var exam = examFull_(examId);
-  if (!exam) throw new Error('This exam no longer exists.');
+  var full = examFull_(examId);
+  if (!full) throw new Error('This exam no longer exists.');
+  var exam = full;
   var who = admin ? null : enrollmentFor_(email, exam);
   if (!admin) {
     if (exam.status !== 'Published' || !who) throw new Error('This exam is not available to you.');
@@ -158,6 +165,9 @@ function api_start(examId) {
   var id = attemptId_(examId, email);
   var live = getLive_(id);
   var now = Date.now();
+  // the student's set (the instructor previews the set they choose)
+  var set = live && live.set != null ? live.set : full.sets ? (admin ? (previewSet === 'B' ? 'B' : 'A') : setFor_(full, email)) : '';
+  exam = examForSet_(full, set);
   if (live && expireIfLate_(live, exam)) live = null;
   var answers = {};
   if (live) {
@@ -187,19 +197,21 @@ function api_start(examId) {
       corder[q.id] = letters.join('');
     });
     live = { id: id, examId: examId, email: email, started: now, deadline: deadline, departures: 0, awayMs: 0,
-             awaySince: 0, events: [], order: order, corder: corder, row: 0 };
-    event_(live, 'started');
+             awaySince: 0, events: [], order: order, corder: corder, row: 0, set: set, photos: {} };
+    event_(live, 'started', set ? 'Set ' + set : '');
     if (!row) {
       var rec = [];
       rec[AC.ID - 1] = id; rec[AC.EXAM - 1] = examId; rec[AC.SUBJECT - 1] = exam.subject; rec[AC.TITLE - 1] = exam.title;
       rec[AC.EMAIL - 1] = email; rec[AC.NO - 1] = who.no; rec[AC.NAME - 1] = who.name; rec[AC.SECTION - 1] = who.section;
       rec[AC.STATUS - 1] = STATUS_LIVE; rec[AC.STARTED - 1] = new Date(now); rec[AC.DEADLINE - 1] = new Date(deadline);
-      for (var c = AC.SUBMITTED; c <= AC.MANUAL; c++) rec[c - 1] = '';
+      for (var c = AC.SUBMITTED; c <= AC.PHOTOS; c++) rec[c - 1] = '';
+      rec[AC.SET - 1] = set;
       rec[AC.LEFT - 1] = 0; rec[AC.AWAY - 1] = 0; rec[AC.ANSWERS - 1] = '{}';
       sheet_(TABS.ATTEMPTS).appendRow(rec);  // appendRow is atomic, so many students can start at once
       row = findAttemptRow_(id);
     } else {
       sheet_(TABS.ATTEMPTS).getRange(row, AC.STATUS, 1, 3).setValues([[STATUS_LIVE, new Date(now), new Date(deadline)]]);
+      sheet_(TABS.ATTEMPTS).getRange(row, AC.SET).setValue(set);
     }
     live.row = row;
   }
@@ -207,7 +219,7 @@ function api_start(examId) {
   writeProgress_(live);
   return {
     exam: publicExam_(exam, live),
-    state: { deadline: live.deadline, serverNow: Date.now(), answers: answers, departures: live.departures },
+    state: { deadline: live.deadline, serverNow: Date.now(), answers: answers, departures: live.departures, photos: live.photos || {} },
     student: { name: who.name, no: who.no, section: who.section }
   };
 }
@@ -220,7 +232,10 @@ function api_save(examId, answers) {
 }
 
 var LOGGABLE = { 'fullscreen-exit': 'left fullscreen', copy: 'tried to copy', cut: 'tried to cut', paste: 'tried to paste',
-                 'right-click': 'tried to right-click', shortcut: 'blocked shortcut' };
+                 'right-click': 'tried to right-click', shortcut: 'blocked shortcut',
+                 // the photo picker (camera or files) takes the student off the page; it is logged, not counted as leaving
+                 'photo-open': 'opened the photo picker', 'photo-away': 'in the photo picker (off the page)',
+                 'photo-back': 'back from the photo picker', 'photo-late': 'stayed in the photo picker too long' };
 
 function api_event(examId, type, detail, answers) {
   return withLive_(examId, function (live, exam) {
@@ -263,6 +278,7 @@ function api_review(examId) {
   if (!row) throw new Error('You have not taken this exam.');
   var r = sheet_(TABS.ATTEMPTS).getRange(row, 1, 1, ATT_HEAD.length).getValues()[0];
   if (r[AC.STATUS - 1] !== STATUS_DONE) throw new Error('This exam has not been submitted yet.');
+  exam = examForSet_(exam, r[AC.SET - 1]);
   if (!canReview_(exam, Date.now()) && !isAdmin_(email)) {
     throw new Error(exam.showSolutions === 'Never' ? 'Solutions for this exam are not shown.' :
       'Solutions are shown after the exam closes' + (exam.closes ? ' on ' + niceTime_(exam.closes) : '') + '.');
@@ -270,7 +286,7 @@ function api_review(examId) {
   var answers = parseJson_(r[AC.ANSWERS - 1], {});
   var g = grade_(exam, answers, parseJson_(r[AC.MANUAL - 1], {}));
   return {
-    title: exam.title, subject: exam.subject, score: g.score, total: g.total, pending: g.pending,
+    title: exam.title, subject: exam.subject, set: exam.set || '', score: g.score, total: g.total, pending: g.pending,
     images: images_(imageIdsIn_(exam.questions, true)),
     final: r[AC.FINAL - 1] === '' ? '' : r[AC.FINAL - 1], remarks: r[AC.REMARKS - 1],
     questions: exam.questions.map(function (q, i) {
@@ -303,6 +319,7 @@ function withLive_(examId, fn) {
     if (done) return { submitted: true };
     throw new Error('Your exam session was not found. Reload the page.');
   }
+  exam = examForSet_(exam, live.set);
   if (expireIfLate_(live, exam)) return { submitted: true, reason: 'time' };
   return fn(live, exam);
 }
@@ -362,6 +379,7 @@ function finalize_(live, exam, answers, reason) {
     new Date(live.deadline), new Date(), reason, g.score, g.total]]);
   sh.getRange(row, AC.LEFT, 1, AC.EVENTS - AC.LEFT + 1).setValues([[live.departures, Math.round(live.awayMs / 1000),
     answersJson_(answers), itemsJson_(g), JSON.stringify(live.events)]]);
+  if (live.photos && Object.keys(live.photos).length) sh.getRange(row, AC.PHOTOS).setValue(JSON.stringify(live.photos));
   dropLive_(live.id);
   return g;
 }
@@ -400,7 +418,7 @@ function maintenance() {
   keys.forEach(function (k) {
     var live = JSON.parse(p.getProperty(k) || 'null');
     if (!live || Date.now() <= live.deadline + GRACE_MS) return;
-    var exam = examFull_(live.examId);
+    var exam = examForSet_(examFull_(live.examId), live.set);
     try {
       if (exam) finalize_(live, exam, readAnswers_(live), 'Time ran out');
       else p.deleteProperty(k);
@@ -581,7 +599,8 @@ function publicExam_(exam, live) {
   var order = live.order.filter(function (id) { return byId[id]; });
   exam.questions.forEach(function (q) { if (order.indexOf(q.id) < 0) order.push(q.id); });
   return {
-    id: exam.id, title: exam.title, subject: exam.subject, instructions: exam.instructions,
+    id: exam.id, title: exam.title, subject: exam.subject, instructions: exam.instructions, set: exam.set || '',
+    allowPhotos: !!exam.allowPhotos, maxPhotos: MAX_PHOTOS,
     images: images_(imageIdsIn_(exam.questions, false)),
     maxLeave: exam.maxLeave, blockCopy: exam.blockCopy,
     questions: order.map(function (id) {
@@ -620,8 +639,136 @@ function examFromRow_(r) {
     maxLeave: Math.max(0, Math.floor(Number(r[8]) || 0)),
     shuffleQ: truthy_(r[9]), shuffleC: truthy_(r[10]), blockCopy: r[11] === '' ? true : truthy_(r[11]), showScore: truthy_(r[12]),
     showSolutions: SHOW_SOLUTIONS.indexOf(String(r[13]).trim()) >= 0 ? String(r[13]).trim() : 'After closing',
-    instructions: String(r[14] || '')
+    instructions: String(r[14] || ''),
+    sets: truthy_(r[16]), setChanges: parseJson_(String(r[17] || ''), {}), allowPhotos: truthy_(r[18])
   };
+}
+
+// ---------------------------------------------------------------------------
+// Set A and Set B
+// ---------------------------------------------------------------------------
+
+/**
+ * The set a student takes: the instructor's choice if they made one, otherwise alternating down the class list in
+ * each block section (1st student A, 2nd B, 3rd A …), so students next to each other on the list get different sets.
+ */
+function setFor_(exam, email) {
+  if (!exam.sets) return '';
+  var chosen = exam.setChanges[email];
+  if (chosen === 'A' || chosen === 'B') return chosen;
+  var me = enrollmentFor_(email, exam);
+  if (!me) return 'A';
+  var map = roster_(), n = 0;
+  var emails = Object.keys(map);   // class list order
+  for (var i = 0; i < emails.length; i++) {
+    var e = enrollmentFor_(emails[i], exam);
+    if (!e || e.section !== me.section) continue;
+    if (emails[i] === email) return n % 2 ? 'B' : 'A';
+    n++;
+  }
+  return 'A';
+}
+
+/** The exam with only the questions of one set (questions marked for both sets stay). */
+function examForSet_(exam, set) {
+  if (!exam || !exam.sets || !set) return exam;
+  var x = Object.assign({}, exam);
+  x.questions = exam.questions.filter(function (q) { return !q.set || q.set === set; });
+  x.set = set;
+  return x;
+}
+
+/** Before a student starts, the instructor can give them the other set. set: "A", "B" or "" (back to automatic). */
+function admin_setStudentSet(examId, email, set) {
+  requireAdmin_();
+  email = String(email || '').toLowerCase();
+  var row = findAttemptRow_(attemptId_(examId, email));
+  if (row && sheet_(TABS.ATTEMPTS).getRange(row, AC.STATUS).getValue() !== STATUS_RESET) {
+    throw new Error('This student has already started the exam, so their set cannot change. Allow a retake first.');
+  }
+  var sh = sheet_(TABS.EXAMS), r = findRow_(sh, 1, examId);
+  if (!r) throw new Error('Exam not found.');
+  var changes = parseJson_(String(sh.getRange(r, 18).getValue() || ''), {});
+  if (set === 'A' || set === 'B') changes[email] = set; else delete changes[email];
+  sh.getRange(r, 18).setValue(JSON.stringify(changes));
+  invalidate_([examId]);
+  var exam = examFull_(examId);
+  return { set: setFor_(exam, email), chosen: !!changes[email] };
+}
+
+// ---------------------------------------------------------------------------
+// Photos of solutions (saved in the instructor's Google Drive)
+// ---------------------------------------------------------------------------
+
+function photoFolder_(exam) {
+  var roots = DriveApp.getFoldersByName(CONFIG.PHOTO_FOLDER);
+  var root = roots.hasNext() ? roots.next() : DriveApp.createFolder(CONFIG.PHOTO_FOLDER);
+  var name = (exam.subject + ' - ' + exam.title + ' (' + exam.id + ')').replace(/[\\/:*?"<>|]/g, '-');
+  var subs = root.getFoldersByName(name);
+  return subs.hasNext() ? subs.next() : root.createFolder(name);
+}
+
+function writePhotos_(live) {
+  sheet_(TABS.ATTEMPTS).getRange(liveRow_(live), AC.PHOTOS).setValue(JSON.stringify(live.photos || {}));
+}
+
+/** A student uploads a photo of their work for one question (problem solving or essay). */
+function api_uploadPhoto(examId, qid, dataUrl) {
+  return withLive_(examId, function (live, exam) {
+    if (!exam.allowPhotos) throw new Error('Photo uploads are not allowed in this exam.');
+    var qi = -1;
+    exam.questions.forEach(function (q, i) { if (q.id === qid) qi = i; });
+    var q = exam.questions[qi];
+    if (!q || (q.type !== 'PS' && q.type !== 'ES')) throw new Error('Photos can only be added to problem-solving and essay questions.');
+    var m = String(dataUrl || '').match(/^data:image\/(jpeg|png);base64,([A-Za-z0-9+\/=]+)$/);
+    if (!m) throw new Error('That file is not a photo (use a JPG or PNG picture).');
+    if (dataUrl.length > PHOTO_MAX) throw new Error('That photo is too large. Try again with a smaller picture.');
+    live.photos = live.photos || {};
+    var list = live.photos[qid] = live.photos[qid] || [];
+    if (list.length >= MAX_PHOTOS) throw new Error('You can add up to ' + MAX_PHOTOS + ' photos to a question.');
+    var who = enrollmentFor_(live.email, exam) || { no: live.email.split('@')[0], name: '' };
+    var stamp = Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyy-MM-dd HH.mm.ss');
+    var fname = (who.no + ' ' + who.name + ' - Q' + (qi + 1) + ' - ' + stamp + '.' + (m[1] === 'png' ? 'png' : 'jpg')).replace(/[\\/:*?"<>|]/g, '-');
+    var file = photoFolder_(exam).createFile(Utilities.newBlob(Utilities.base64Decode(m[2]), 'image/' + m[1], fname));
+    list.push(file.getId());
+    event_(live, 'added a photo', 'Q' + (qi + 1));
+    saveLive_(live);
+    writePhotos_(live);
+    writeProgress_(live);
+    return { photos: list };
+  });
+}
+
+function api_removePhoto(examId, qid, fileId) {
+  return withLive_(examId, function (live) {
+    var list = (live.photos || {})[qid] || [];
+    var at = list.indexOf(fileId);
+    if (at < 0) throw new Error('Photo not found.');
+    try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) { /* already gone */ }
+    list.splice(at, 1);
+    saveLive_(live);
+    writePhotos_(live);
+    return { photos: list };
+  });
+}
+
+/** The photos of an attempt, as pictures the admin site can show: {question id: [{id, data, url}]}. */
+function admin_photos(attemptId) {
+  requireAdmin_();
+  var row = findAttemptRow_(attemptId);
+  if (!row) throw new Error('Attempt not found.');
+  var live = getLive_(attemptId);
+  var photos = live && live.photos ? live.photos : parseJson_(sheet_(TABS.ATTEMPTS).getRange(row, AC.PHOTOS).getValue(), {});
+  var out = {};
+  Object.keys(photos).forEach(function (qid) {
+    out[qid] = photos[qid].map(function (id) {
+      try {
+        var b = DriveApp.getFileById(id).getBlob();
+        return { id: id, data: 'data:' + b.getContentType() + ';base64,' + Utilities.base64Encode(b.getBytes()), url: 'https://drive.google.com/file/d/' + id + '/view' };
+      } catch (e) { return { id: id, data: '', url: 'https://drive.google.com/file/d/' + id + '/view', missing: true }; }
+    });
+  });
+  return out;
 }
 
 function questions_(examId) {
@@ -633,7 +780,8 @@ function questions_(examId) {
       var t = String(r[3]).trim().toUpperCase();
       var q = { id: String(r[1]), type: TYPES.indexOf(t) >= 0 ? t : 'PS', text: String(r[4]),
                 answer: String(r[6]).trim(), tol: r[7] === '' ? 0 : Number(r[7]) || 0,
-                points: r[8] === '' ? 1 : Math.max(0, Number(r[8]) || 0), solution: String(r[9] || '') };
+                points: r[8] === '' ? 1 : Math.max(0, Number(r[8]) || 0), solution: String(r[9] || ''),
+                set: /^[AB]$/i.test(String(r[10] || '').trim()) ? String(r[10]).trim().toUpperCase() : '' };
       if (q.type === 'MC') { q.choices = String(r[5]).split('\n').filter(function (c) { return c.trim(); }); q.answer = q.answer.toUpperCase(); }
       if (q.type === 'PS' && /^\s*\[/.test(String(r[5]))) {
         // sub-questions are kept as JSON in the Choices column: [{l: "a", t: text, a: answer, tol: %, p: points}]
@@ -708,6 +856,7 @@ function invalidate_(examIds) {
 
 function admin_load() {
   requireAdmin_();
+  [[TABS.EXAMS, EXAM_HEAD], [TABS.QUESTIONS, Q_HEAD], [TABS.ATTEMPTS, ATT_HEAD]].forEach(function (t) { ensureHead_(t[0], t[1]); });
   var counts = {};
   var sh = sheet_(TABS.ATTEMPTS);
   if (sh.getLastRow() > 1) {
@@ -779,6 +928,7 @@ function admin_saveExam(obj) {
     var text = String(q.text || '').trim();
     if (!text) throw new Error('Question ' + n + ' has no text.');
     var out = { id: /^[\w-]{4,40}$/.test(q.id || '') ? q.id : newId_('Q'), type: type, text: text.slice(0, 20000),
+                set: obj.sets && /^[AB]$/.test(q.set || '') ? q.set : '',
                 points: Math.max(0, Number(q.points) || 0), solution: String(q.solution || '').slice(0, 40000) };
     if (type === 'MC') {
       out.choices = (q.choices || []).map(function (c) { return String(c).replace(/\n+/g, ' ').trim(); }).filter(String);
@@ -813,7 +963,12 @@ function admin_saveExam(obj) {
                (obj.sections || []).map(function (s) { return clean_(s, 60); }).filter(String).join(', '), maxLeave,
                !!obj.shuffleQ, !!obj.shuffleC, obj.blockCopy !== false, !!obj.showScore,
                SHOW_SOLUTIONS.indexOf(obj.showSolutions) >= 0 ? obj.showSolutions : 'After closing',
-               String(obj.instructions || '').slice(0, 5000), new Date()];
+               String(obj.instructions || '').slice(0, 5000), new Date(), !!obj.sets,
+               JSON.stringify((exams_().filter(function (x) { return x.id === obj.id; })[0] || {}).setChanges || {}), !!obj.allowPhotos];
+    if (obj.sets) {
+      var inA = qs.filter(function (q) { return q.set !== 'B'; }).length, inB = qs.filter(function (q) { return q.set !== 'A'; }).length;
+      if (obj.status === 'Published' && (!inA || !inB)) throw new Error('With two sets, both Set A and Set B need questions.');
+    }
     var sh = sheet_(TABS.EXAMS);
     var r = findRow_(sh, 1, id);
     if (r) sh.getRange(r, 1, 1, row.length).setValues([row]);
@@ -822,7 +977,7 @@ function admin_saveExam(obj) {
       var keep = rows_(TABS.QUESTIONS, Q_HEAD.length).filter(function (x) { return String(x[0]) && String(x[0]) !== id; });
       var mine = qs.map(function (q, i) {
         var choices = q.parts ? JSON.stringify(q.parts) : q.choices.join('\n');
-        return [id, q.id, i + 1, q.type, txt_(q.text), txt_(choices), txt_(q.answer), q.tol, q.points, txt_(q.solution)];
+        return [id, q.id, i + 1, q.type, txt_(q.text), txt_(choices), txt_(q.answer), q.tol, q.points, txt_(q.solution), q.set];
       });
       // Plain-text columns, so answers such as 3/8 or 1-2 are not turned into dates
       writeTable_(TABS.QUESTIONS, Q_HEAD, keep.map(function (r) { return r.map(function (v) { return typeof v === 'string' ? txt_(v) : v; }); }).concat(mine), [5, 6, 7, 10]);
@@ -886,13 +1041,14 @@ function admin_results(examId) {
       if (exam.sections.length && exam.sections.indexOf(s.section) < 0) return;
       if (seen[email]) return;
       seen[email] = 1;
-      out.push({ email: email, no: s.no, name: s.name, section: s.section, blocked: s.blocked, attempt: byEmail[email] || null });
+      out.push({ email: email, no: s.no, name: s.name, section: s.section, blocked: s.blocked, attempt: byEmail[email] || null,
+                 set: exam.sets ? (byEmail[email] ? byEmail[email].set : setFor_(exam, email)) : '', setChosen: !!exam.setChanges[email] });
     });
   });
   Object.keys(byEmail).forEach(function (email) {
     if (seen[email]) return;
     var a = byEmail[email];
-    out.push({ email: email, no: a.no, name: a.name, section: a.section, extra: true, attempt: a });
+    out.push({ email: email, no: a.no, name: a.name, section: a.section, extra: true, attempt: a, set: a.set });
   });
   out.sort(function (a, b) { return cmp_(a.section, b.section) || cmp_(a.name, b.name); });
   exam.images = images_(imageIdsIn_(exam.questions, true));
@@ -903,6 +1059,8 @@ function admin_results(examId) {
 
 function attemptView_(r, exam) {
   var id = r[AC.ID - 1];
+  var set = String(r[AC.SET - 1] || '');
+  exam = examForSet_(exam, set);
   var answers = parseJson_(r[AC.ANSWERS - 1], {});
   var live = r[AC.STATUS - 1] === STATUS_LIVE ? getLive_(id) : null;
   var manual = parseJson_(r[AC.MANUAL - 1], {});
@@ -915,7 +1073,9 @@ function attemptView_(r, exam) {
     left: live ? live.departures : Number(r[AC.LEFT - 1]) || 0,
     away: live ? Math.round((live.awayMs + (live.awaySince ? Date.now() - live.awaySince : 0)) / 1000) : Number(r[AC.AWAY - 1]) || 0,
     awayNow: !!(live && live.awaySince), answers: answers, items: g.items, pending: g.pending, manual: manual,
-    events: live ? live.events : parseJson_(r[AC.EVENTS - 1], [])
+    events: live ? live.events : parseJson_(r[AC.EVENTS - 1], []), set: set,
+    photoCount: (function (ph) { return Object.keys(ph).reduce(function (t, k) { return t + ph[k].length; }, 0); })(
+      live && live.photos ? live.photos : parseJson_(r[AC.PHOTOS - 1], {}))
   };
 }
 
@@ -939,8 +1099,9 @@ function admin_saveItemScores(attemptId, scores) {
   var row = findAttemptRow_(attemptId);
   if (!row) throw new Error('Attempt not found.');
   var r = sh.getRange(row, 1, 1, ATT_HEAD.length).getValues()[0];
-  var exam = examFull_(r[AC.EXAM - 1]);
-  if (!exam) throw new Error('This exam no longer exists.');
+  var full = examFull_(r[AC.EXAM - 1]);
+  if (!full) throw new Error('This exam no longer exists.');
+  var exam = examForSet_(full, r[AC.SET - 1]);
   var manual = parseJson_(r[AC.MANUAL - 1], {});
   exam.questions.forEach(function (q, i) {
     if (!scores || !(q.id in scores)) return;
@@ -958,7 +1119,7 @@ function admin_saveItemScores(attemptId, scores) {
     sh.getRange(row, AC.ITEMS).setValue(itemsJson_(g));
   }
   r[AC.MANUAL - 1] = JSON.stringify(manual);
-  return attemptView_(r, exam);
+  return attemptView_(r, full);
 }
 
 function admin_allowRetake(attemptId) {
@@ -983,7 +1144,7 @@ function admin_regrade(examId) {
   var all = sh.getRange(2, 1, last - 1, ATT_HEAD.length).getValues();
   all.forEach(function (r, i) {
     if (r[AC.EXAM - 1] !== examId || r[AC.STATUS - 1] !== STATUS_DONE) return;
-    var g = grade_(exam, parseJson_(r[AC.ANSWERS - 1], {}), parseJson_(r[AC.MANUAL - 1], {}));
+    var g = grade_(examForSet_(exam, r[AC.SET - 1]), parseJson_(r[AC.ANSWERS - 1], {}), parseJson_(r[AC.MANUAL - 1], {}));
     var items = itemsJson_(g);
     if (g.score === r[AC.SCORE - 1] && g.total === r[AC.TOTAL - 1] && items === r[AC.ITEMS - 1]) return;
     sh.getRange(i + 2, AC.SCORE, 1, 2).setValues([[g.score, g.total]]);
@@ -1305,6 +1466,14 @@ function sheetFor_(name, head) {
   sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#F6E2E5');
   sh.setFrozenRows(1);
   return sh;
+}
+
+/** Adds the names of new columns to the header row of a tab made by an earlier version. */
+function ensureHead_(name, head) {
+  var sh = ss_().getSheetByName(name);
+  if (!sh) return;
+  var cur = sh.getRange(1, 1, 1, head.length).getValues()[0];
+  if (cur.some(function (v, i) { return String(v) !== head[i]; })) sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#F6E2E5');
 }
 
 function rows_(name, width, display) {

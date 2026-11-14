@@ -32,7 +32,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   var ED = null;             // exam being edited
   var edDirty = false;
   var parsed = null;         // last pasted questions
-  var resExam = "", resData = null, resSection = "", resOpen = {}, resTimer = 0;
+  var resExam = "", resData = null, resSection = "", resOpen = {}, resTimer = 0, resSet = "", resPhotos = {};
   var rosterData = null, book = null, rosterFilter = { subject: "", section: "", q: "" };
 
   document.getElementById("who").textContent = "Signed in as " + (BOOT.email || "");
@@ -297,7 +297,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     document.getElementById("filter").onchange = function () { examFilter = this.value; exams(); };
     document.getElementById("new").onclick = function () {
       ED = { id: "", subject: examFilter || subjectsList()[0] || "", title: "", status: "Draft", opensText: "", closesText: "", limit: 60, sections: [], maxLeave: 3,
-             shuffleQ: false, shuffleC: false, blockCopy: true, showScore: false, showSolutions: "After closing", instructions: "", questions: [], counts: { live: 0, done: 0 } };
+             shuffleQ: false, shuffleC: false, blockCopy: true, showScore: false, showSolutions: "After closing", instructions: "", questions: [], counts: { live: 0, done: 0 },
+             sets: false, allowPhotos: false };
       edDirty = false; parsed = null; editor();
     };
     view.querySelectorAll("[data-edit]").forEach(function (b) {
@@ -354,6 +355,11 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="check"><input type="checkbox" id="f-shc"' + (x.shuffleC ? " checked" : "") + "> Shuffle choices</label>" +
       '<label class="check"><input type="checkbox" id="f-copy"' + (x.blockCopy ? " checked" : "") + "> Block copy, paste and right-click</label>" +
       '<label class="check"><input type="checkbox" id="f-score"' + (x.showScore ? " checked" : "") + "> Show score right after submitting</label></div>" +
+      '<div class="wide btnrow">' +
+      '<label class="check"><input type="checkbox" id="f-sets"' + (x.sets ? " checked" : "") + '> Two sets (Set A and Set B)</label>' +
+      '<label class="check"><input type="checkbox" id="f-photos"' + (x.allowPhotos ? " checked" : "") + "> Students may upload photos of their solutions</label></div>" +
+      '<p class="wide muted" style="margin:0">Two sets: mark each question Set A, Set B or Both. Students get a set by alternating down the class list in each block section ' +
+      "(you can change a student's set in Results before they start). Photos: problem-solving and essay questions get an \"Add a photo\" button; the photos are saved in your Google Drive and shown in Results for you to grade.</p>" +
       '<div class="wide btnrow"><button class="btn small ghost" id="open-now">Open now</button><button class="btn small ghost" id="close-now">Close now</button>' +
       '<span class="muted">Sets the opening or closing time to now. Remember to choose Published and save.</span></div>' +
       "</div></section>" +
@@ -385,7 +391,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="field">Tolerance % (numbers)<input type="number" min="0" step="any" id="d-tol" value="1" style="width:110px"></label>' +
       '<button class="btn" id="read">Read questions</button></div><div id="parsed"></div></section>' +
 
-      '<section class="ch"><h2>🧾 Questions <span class="muted">(' + x.questions.length + " items · " + total + ' points)</span></h2>' +
+      '<section class="ch"><h2>🧾 Questions <span class="muted">(' + x.questions.length + " items · " + total + ' points)</span></h2>' + setTotals(x) +
       '<div class="btnrow"><label class="check"><input type="checkbox" id="show-pv"> Show how students will see the math</label>' +
       '<button class="btn small ghost" id="add-mc">+ Multiple choice</button><button class="btn small ghost" id="add-id">+ Identification</button>' +
       '<button class="btn small ghost" id="add-ps">+ Problem solving</button><button class="btn small ghost" id="add-es">+ Essay</button>' +
@@ -400,10 +406,25 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (parsed) showParsed();
   }
 
+  function setTotals(x) {
+    if (!x.sets) return "";
+    var t = { A: [0, 0], B: [0, 0] };
+    x.questions.forEach(function (q) {
+      var pts = q.parts && q.parts.length ? partsTotal(q) : Number(q.points) || 0;
+      ["A", "B"].forEach(function (k) { if (!q.set || q.set === k) { t[k][0]++; t[k][1] += pts; } });
+    });
+    var same = t.A[0] === t.B[0] && Math.abs(t.A[1] - t.B[1]) < 1e-9;
+    return '<p class="' + (same ? "muted" : "warnline") + '">Set A: ' + t.A[0] + " items · " + Math.round(t.A[1] * 100) / 100 + " points &nbsp;|&nbsp; Set B: " +
+      t.B[0] + " items · " + Math.round(t.B[1] * 100) / 100 + " points" + (same ? "" : " ⚠️ The two sets are not the same size.") + "</p>";
+  }
+  function setSelect(cur, attrs) {
+    return "<select " + attrs + ">" + [["", "Both sets"], ["A", "Set A"], ["B", "Set B"]].map(function (o) {
+      return '<option value="' + o[0] + '"' + ((cur || "") === o[0] ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") + "</select>";
+  }
   function qCard(q, i) {
     var n = ED.questions.length;
     var warn = qWarnings(q);
-    var head = '<div class="qe-head"><b>Q' + (i + 1) + "</b>" +
+    var head = '<div class="qe-head"><b>Q' + (i + 1) + "</b>" + (ED.sets ? setSelect(q.set, 'data-f="set" data-i="' + i + '"') : "") +
       '<select data-f="type" data-i="' + i + '">' + TYPES.map(function (t) { return '<option value="' + t[0] + '"' + (q.type === t[0] ? " selected" : "") + ">" + t[1] + "</option>"; }).join("") + "</select>" +
       '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-f="points" data-i="' + i + '" value="' + esc(q.parts && q.parts.length ? partsTotal(q) : q.points) + '"' +
         (q.parts && q.parts.length ? ' disabled title="The sum of the parts\' points"' : "") + "></label>" +
@@ -496,6 +517,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     x.instructions = g("f-instr").value;
     x.sections = [].slice.call(document.querySelectorAll("#f-secs input:checked")).map(function (c) { return c.value; });
     x.shuffleQ = g("f-shq").checked; x.shuffleC = g("f-shc").checked; x.blockCopy = g("f-copy").checked; x.showScore = g("f-score").checked;
+    x.sets = g("f-sets").checked; x.allowPhotos = g("f-photos").checked;
   }
 
   function bindEditor() {
@@ -512,6 +534,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       }
       readForm(); ED.sections = []; editor();
     });
+    g("f-sets").addEventListener("change", function () { readForm(); markDirty(); editor(); });
     g("open-now").onclick = function () { g("f-opens").value = nowLocal(); markDirty(); };
     g("close-now").onclick = function () { g("f-closes").value = nowLocal(); markDirty(); };
     function readPasted() {
@@ -598,6 +621,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         convertType(q, t.value);
         markDirty(); editor(); scrollToCard(i);
       } else if (t.dataset.f === "answer" && q.type === "MC") { q.answer = t.value; markDirty(); }
+      else if (t.dataset.f === "set") { q.set = t.value; markDirty(); readForm(); editor(); scrollToCard(i); }
     });
     g("qlist").addEventListener("click", function (e) {
       var b = e.target.closest("button"); if (!b) return;
@@ -688,6 +712,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         html = '<div class="rendered">' + html + '</div><div class="p-answer">' + ans + "</div>";
         return '<div class="qedit' + (w.length ? " warn" : "") + '" data-pcard="' + i + '"><div class="qe-head"><b>#' + (i + 1) + "</b>" +
           '<label class="check">Type ' + typeSelect(q.type, 'data-ptype="' + i + '"') + "</label>" +
+          (ED.sets || p.items.some(function (x) { return x.set; }) ? '<label class="check">Set ' + setSelect(q.set, 'data-pset="' + i + '"') + "</label>" : "") +
           '<label class="check">Points <input type="number" min="0" step="any" style="width:80px" data-ppts="' + i + '" value="' + esc(q.parts && q.parts.length ? partsTotal(q) : q.points) + '"' +
           (q.parts && q.parts.length ? " disabled" : "") + "></label>" + (q.parts && q.parts.length ? '<span class="muted">' + q.parts.length + " parts</span>" : "") +
           "</div>" + html + '<div class="warnline"' + (w.length ? "" : " hidden") + ">⚠️ " + w.map(esc).join(" · ") + "</div></div>";
@@ -696,12 +721,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var add = function (replace) {
       readForm();
       var items = p.items.map(function (q) {
-        var it = { type: q.type, text: q.text, choices: q.choices.slice(), answer: q.answer, points: q.points, tol: q.type === "PS" ? q.tol : "", solution: q.solution };
+        var it = { type: q.type, text: q.text, choices: q.choices.slice(), answer: q.answer, points: q.points, tol: q.type === "PS" ? q.tol : "", solution: q.solution, set: q.set || "" };
         if (q.type === "PS" && q.parts && q.parts.length) it.parts = q.parts.map(function (pt) { return { t: pt.t, a: pt.a, tol: pt.tol, p: pt.p }; });
         return it;
       });
       var btns = box.querySelectorAll("#p-add, #p-replace");
       btns.forEach(function (b) { b.disabled = true; });
+      if (items.some(function (q) { return q.set; }) && !ED.sets) { ED.sets = true; toast("These questions have Set A and Set B, so \"Two sets\" is now on."); }
       savePending(items).then(function () {
         ED.questions = replace ? items : ED.questions.concat(items);
         parsed = null; markDirty(); editor();
@@ -719,6 +745,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       convertType(q, to, { tol: tolDef });
       if (wasDefault) q.points = defPts(to);   // points the file did not set follow the new type's default
     };
+    box.querySelectorAll("[data-pset]").forEach(function (sel) { sel.onchange = function () { p.items[Number(sel.dataset.pset)].set = sel.value; }; });
     box.querySelectorAll("[data-ptype]").forEach(function (sel) {
       sel.onchange = function () {
         var i = Number(sel.dataset.ptype);
@@ -1139,7 +1166,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     var reTypeHead = /^(?:multiple[\s-]*choice|identification|fill[\s-]*in[\s-]*the[\s-]*blanks?|short[\s-]*answer|essay|problem[\s-]*solving|computation)\b[^?]{0,100}$/i;
     var reType = /^type\s*[:\-–]\s*(.+)$/i;
     var reRubric = /^(?:rubric|guide|criteria|scoring\s*guide|model\s*answer)\s*(?:[:\-–]\s*(.*)|\.?\s*)$/i;
-    var partType = null, prevBlank = true;
+    var partType = null, prevBlank = true, curSet = "";
     function typeOf(t) {
       t = String(t);
       if (/multiple[\s-]*choice/i.test(t)) return "MC";
@@ -1169,7 +1196,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     }
     function startQ(label, rest) {
       finish();
-      cur = { label: label, lines: rest ? [rest] : [], choices: [], rawChoices: [], letters: [], partAns: {}, star: "", answer: "", sol: [], points: null, tol: null,
+      cur = { set: curSet, label: label, lines: rest ? [rest] : [], choices: [], rawChoices: [], letters: [], partAns: {}, star: "", answer: "", sol: [], points: null, tol: null,
               partType: partType, typeHint: null, rubric: false };
       field = "q";
     }
@@ -1219,6 +1246,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         if (solCur) solCur[1].push(line.replace(/\s+$/, ""));
         return;
       }
+      var sm2 = t.match(/^set\s*([ab])\b[^?]{0,80}$/i);   // "Set A" / "SET B – Problem solving": the questions below belong to that set
+      if (sm2 && !(cur && field === "sol" && !afterBlank)) { finish(); curSet = sm2[1].toUpperCase(); partType = typeOf(t); return; }
       if (rePart.test(t) && !(cur && field === "sol" && !afterBlank)) { finish(); partType = typeOf(t); return; }
       if (reTypeHead.test(t) && !(cur && field === "sol" && !afterBlank)) { finish(); partType = typeOf(t); return; }
       if (cur && reType.test(t)) { cur.typeHint = typeOf(t.match(reType)[1]) || (/^\s*(mc|id|ps|es)\s*$/i.test(t.match(reType)[1]) ? t.match(reType)[1].trim().toUpperCase() : null); return; }
@@ -1319,6 +1348,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       return { type: "PS", text: text, choices: [], answer: ans.replace(/\s*(?:\(|\[)?(?:final answer)(?:\)|\])?\s*$/i, ""), points: pts("PS"),
                tol: x.tol != null ? x.tol : def.tol, solution: x.solution };
     });
+    out.forEach(function (o, i) { o.set = items[i].set || ""; });
     return { items: out, warnings: warnings };
   }
   window.__parsePaste = parsePaste; // for testing
@@ -1333,12 +1363,14 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="field" style="min-width:320px">Exam<select id="r-exam">' + opts.map(function (x) {
         return '<option value="' + esc(x.id) + '"' + (x.id === resExam ? " selected" : "") + ">" + esc(x.subject + " · " + x.title) + "</option>"; }).join("") + "</select></label>" +
       '<label class="field" style="min-width:180px">Block section<select id="r-sec"></select></label>' +
+      '<label class="field" id="r-set-wrap" style="min-width:120px" hidden>Set<select id="r-set"><option value="">All</option><option>A</option><option>B</option></select></label>' +
       '<button class="btn small ghost" id="r-refresh">Refresh</button><label class="check"><input type="checkbox" id="r-auto" checked> Update every 20 s</label>' +
       '<button class="btn small ghost" id="r-csv">Download CSV</button><button class="btn small ghost" id="r-regrade">Re-grade all</button></div>' +
       '<div id="r-body"><div class="loading"><div class="spinner"></div>Loading…</div></div></section>';
     if (!opts.length) { document.getElementById("r-body").innerHTML = '<p class="muted">No exams yet.</p>'; return; }
     document.getElementById("r-exam").onchange = function () { resExam = this.value; resSection = ""; resOpen = {}; loadResults(); };
     document.getElementById("r-sec").onchange = function () { resSection = this.value; drawResults(); };
+    document.getElementById("r-set").onchange = function () { resSet = this.value; drawResults(); };
     document.getElementById("r-refresh").onclick = function () { loadResults(); };
     document.getElementById("r-auto").onchange = function () { clearTimeout(resTimer); if (this.checked) loadResults(); };
     document.getElementById("r-csv").onclick = csv;
@@ -1369,7 +1401,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     d.rows.forEach(function (r) { secs[r.section] = 1; });
     document.getElementById("r-sec").innerHTML = '<option value="">All</option>' + Object.keys(secs).sort().map(function (s) {
       return "<option" + (s === resSection ? " selected" : "") + ">" + esc(s) + "</option>"; }).join("");
-    var rows = d.rows.filter(function (r) { return !resSection || r.section === resSection; });
+    var sets = !!d.exam.sets;
+    document.getElementById("r-set-wrap").hidden = !sets;
+    var rows = d.rows.filter(function (r) { return (!resSection || r.section === resSection) && (!sets || !resSet || r.set === resSet); });
     var n = { done: 0, live: 0, none: 0, left: 0 };
     rows.forEach(function (r) {
       var a = r.attempt;
@@ -1383,20 +1417,22 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<div class="stat"><div class="l">Taking it now</div><div class="v">' + n.live + "</div></div>" +
       '<div class="stat"><div class="l">Not started</div><div class="v">' + n.none + "</div></div>" +
       '<div class="stat"><div class="l">Left the page</div><div class="v" style="color:var(--no)">' + n.left + '</div><div class="muted">students, at least once</div></div></div>' +
-      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th><th>Status</th><th>Score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
+      '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th>' + (sets ? "<th>Set</th>" : "") + '<th>Status</th><th>Score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
       rows.map(function (r) {
         var a = r.attempt;
         var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span>' + (a.pending ? ' <span class="pill">' + a.pending + " essay" + (a.pending > 1 ? "s" : "") + " to check</span>" : "") +
           '<div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
           : '<span class="pill open">In progress</span>' + (a.awayNow ? ' <span class="pill bad">Away now</span>' : "");
         var main = "<tr><td>" + esc(r.no) + '</td><td class="wrap">' + esc(r.name) + (r.extra ? ' <span class="pill">not on list</span>' : "") + (r.blocked ? ' <span class="pill bad">blocked</span>' : "") +
-          "</td><td>" + esc(r.section) + "</td><td>" + st + "</td><td>" + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
+          "</td><td>" + esc(r.section) + "</td>" + (sets ? "<td>" + (a ? '<span class="setpill">' + esc(r.set || "—") + "</span>" :
+            '<select data-chset="' + esc(r.email) + '" title="Change this student\'s set before they start"><option value="">' + esc(r.set) + (r.setChosen ? "" : " (automatic)") + '</option>' +
+            '<option value="A">A</option><option value="B">B</option></select>') + "</td>" : "") + "<td>" + st + "</td><td>" + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
           "<td>" + (a ? '<input class="score" data-final="' + esc(a.id) + '" value="' + esc(a.final) + '" placeholder="—">' : "") + "</td>" +
           "<td>" + (a ? '<input class="remarks" data-remarks="' + esc(a.id) + '" value="' + esc(a.remarks) + '">' : "") + "</td>" +
           '<td style="' + (a && a.left ? "color:var(--no);font-weight:800" : "") + '">' + (a ? a.left : "") + "</td><td>" + (a && a.away ? dur(a.away) : "") + "</td>" +
           "<td>" + (a && a.submitted ? when(a.submitted) : "") + "</td><td>" + (a ? '<div class="row-actions"><button class="btn small" data-save="' + esc(a.id) + '">Save</button>' +
           '<button class="btn small ghost" data-open="' + esc(a.id) + '">' + (resOpen[a.id] ? "Hide" : "Answers") + '</button><button class="btn small danger" data-retake="' + esc(a.id) + '">Retake</button></div>' : "") + "</td></tr>";
-        return main + (a && resOpen[a.id] ? '<tr class="detail"><td colspan="11"><div class="detail-wrap">' + detail(a, x) + "</div></td></tr>" : "");
+        return main + (a && resOpen[a.id] ? '<tr class="detail"><td colspan="' + (sets ? 12 : 11) + '"><div class="detail-wrap">' + detail(a, x) + "</div></td></tr>" : "");
       }).join("") + "</tbody></table></div>";
     body.querySelectorAll("[data-open]").forEach(function (b) { b.onclick = function () { resOpen[b.dataset.open] = !resOpen[b.dataset.open]; drawResults(); }; });
     body.querySelectorAll("[data-save]").forEach(function (b) {
@@ -1408,6 +1444,23 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           busy(b, false); toast("Saved.");
           d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { r.attempt.final = f; r.attempt.remarks = rm; } });
         }).catch(function (e) { busy(b, false); toast(e.message, true); });
+      };
+    });
+    body.querySelectorAll("[data-chset]").forEach(function (sel) {
+      sel.onchange = function () {
+        var email = sel.dataset.chset, v = sel.value;
+        if (!v) return;
+        call("admin_setStudentSet", resExam, email, v).then(function (r) {
+          d.rows.forEach(function (x) { if (x.email === email) { x.set = r.set; x.setChosen = r.chosen; } });
+          toast("Set " + r.set + " given."); drawResults();
+        }).catch(function (e) { toast(e.message, true); drawResults(); });
+      };
+    });
+    body.querySelectorAll("[data-showphotos]").forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.showphotos;
+        busy(b, true, "Loading photos…");
+        call("admin_photos", id).then(function (ph) { resPhotos[id] = ph; drawResults(); }).catch(function (e) { busy(b, false); toast(e.message, true); });
       };
     });
     body.querySelectorAll("[data-items]").forEach(function (b) {
@@ -1439,8 +1492,11 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function cssq(s) { return String(s).replace(/(["\\])/g, "\\$1"); }
   function detail(a, x) {
     var html = '<div class="grid2" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)"><div>';
-    x.questions.forEach(function (q, i) {
-      var mine = a.answers[q.id], it = a.items[i] || {};
+    var ph = resPhotos[a.id];
+    if (a.photoCount && !ph) html += '<p><button class="btn small" data-showphotos="' + esc(a.id) + '">📷 Show photos (' + a.photoCount + ")</button></p>";
+    var mineQs = x.questions.filter(function (q) { return !x.sets || !a.set || !q.set || q.set === a.set; });   // this student's set
+    mineQs.forEach(function (q, i) {
+      var mine = a.answers[q.id], it = a.items.filter(function (y) { return y.id === q.id; })[0] || {};
       var partial = it.got > 0 && it.got < q.points;
       var mark = it.pending ? "⏳ to check" : q.type === "ES" ? (it.manual ? "✔ scored" : "") : partial ? "◐ partial" : it.ok ? "✅" : "❌";
       var border = it.pending ? "var(--amber-line)" : q.type === "ES" || partial ? "var(--line)" : it.ok ? "var(--ok-bd)" : "var(--no-bd)";
@@ -1465,6 +1521,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         else html += "<p>Final answer: <b>" + esc(mine && mine.a || "(blank)") + "</b> · Key: <b>" + esc(String(q.answer).split("|").join(" or ")) + "</b></p>" +
           (mine && mine.s ? '<div class="muted">Student\'s solution:</div><div class="sol-view">' + esc(mine.s) + "</div>" : '<p class="muted">No solution written.</p>');
       }
+      if (ph && ph[q.id] && ph[q.id].length) html += '<div class="muted">Photos of the solution (click to open in Google Drive):</div><div class="photo-view">' + ph[q.id].map(function (f) {
+        return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + (f.data ? '<img src="' + f.data + '" alt="Photo">' : "Photo (open in Drive)") + "</a>"; }).join("") + "</div>";
       html += "</div>";
     });
     html += '<div class="btnrow" style="align-items:center"><button class="btn small" data-items="' + esc(a.id) + '">Save points</button>' +
@@ -1478,13 +1536,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   function csv() {
     var d = resData;
     if (!d) return;
-    var head = ["Student No.", "Name", "Block and Section", "Email", "Status", "Score", "Total", "Final score", "Remarks", "Times left page", "Seconds away", "Started", "Submitted", "How submitted"];
-    d.exam.questions.forEach(function (q, i) { head.push("Q" + (i + 1)); });
+    var head = ["Student No.", "Name", "Block and Section", "Email", "Set", "Status", "Score", "Total", "Final score", "Remarks", "Times left page", "Seconds away", "Started", "Submitted", "How submitted"];
+    d.exam.questions.forEach(function (q, i) { head.push("Q" + (i + 1) + (q.set ? " (Set " + q.set + ")" : "")); });
     var rows = [head].concat(d.rows.filter(function (r) { return !resSection || r.section === resSection; }).map(function (r) {
       var a = r.attempt || {};
-      var row = [r.no, r.name, r.section, r.email, a.status || "Not started", a.score, a.total, a.final, a.remarks, a.left, a.away,
+      var row = [r.no, r.name, r.section, r.email, r.set || "", a.status || "Not started", a.score, a.total, a.final, a.remarks, a.left, a.away,
                  a.started ? new Date(a.started).toLocaleString("en-PH", { timeZone: "Asia/Manila" }) : "", a.submitted ? new Date(a.submitted).toLocaleString("en-PH", { timeZone: "Asia/Manila" }) : "", a.how];
-      d.exam.questions.forEach(function (q, i) { row.push(a.items ? (a.items[i] || {}).got : ""); });
+      d.exam.questions.forEach(function (q) { var it = (a.items || []).filter(function (y) { return y.id === q.id; })[0]; row.push(it ? it.got : ""); });
       return row;
     }));
     var text = "\ufeff" + rows.map(function (r) { return r.map(function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(","); }).join("\r\n");

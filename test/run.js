@@ -443,6 +443,62 @@ Answer key
   const rv8 = (await s8.textContent('#view')).replace(/\s+/g, ' ');
   check(/✅ Your answer: \\frac\{51\}\{25\}/.test(rv8) && /❌ Your answer: 13 · 0 \/ 2\.5/.test(rv8) && /Correct answer: none or at rest or stationary/.test(rv8), 'review: each part with the student\'s answer and the correct one', rv8.slice(0, 500));
 
+  // ---------- Set A / Set B and photos of solutions ----------
+  const PSET = await ad.evaluate((t) => window.__parsePaste(t, { mc: 1, id: 1, ps: 5, es: 10, tol: 1 }), 'SET A\n1. A only?\nA. x\nB. y\nAnswer: A\n\nSET B\n1. B only?\nA. x\nB. y\nAnswer: B');
+  check(PSET.items.map((q) => q.set).join('') === 'AB' && PSET.items.every((q) => q.type === 'MC'), 'paste: "Set A" / "Set B" headings mark the questions', JSON.stringify(PSET.items.map((q) => [q.set, q.type])));
+  const q4 = H.as(H.ADMIN, () => H.ctx.admin_saveExam({ subject: 'MMW', title: 'Quiz 4', status: 'Published', limit: 30, maxLeave: 3, sets: true, allowPhotos: true,
+    showSolutions: 'After submitting', questions: [
+      { type: 'MC', text: 'Both sets: pick y', choices: ['x', 'y'], answer: 'B', points: 1, set: '' },
+      { type: 'ID', text: 'Set A only: capital of France', answer: 'Paris', points: 1, set: 'A' },
+      { type: 'ID', text: 'Set B only: capital of Japan', answer: 'Tokyo', points: 1, set: 'B' },
+      { type: 'PS', text: 'Both sets: 2 + 3 = ?', answer: '5', tol: 0, points: 2, set: '' }] }));
+  await ad.reload(); await ad.waitForTimeout(400);
+  await ad.click('[data-tab=results]'); await ad.waitForTimeout(400);
+  await ad.selectOption('#r-exam', q4.id); await ad.waitForTimeout(700);
+  const setOf = async (name) => (await ad.textContent('#r-body tbody tr:has-text("' + name + '") td:nth-child(4)')).trim();
+  check((await setOf('DELA CRUZ')).startsWith('A') && (await setOf('REYES')).startsWith('B') && (await setOf('SANTOS')).startsWith('A'), 'sets alternate down the class list (A, B, A)',
+    [await setOf('DELA CRUZ'), await setOf('REYES'), await setOf('SANTOS')].join(' | '));
+  await ad.selectOption('[data-chset="2026-100002@rtu.edu.ph"]', 'B'); await ad.waitForTimeout(500);
+  check(/Set B given/.test(await ad.textContent('#toast')) && (await setOf('SANTOS')).startsWith('B'), "results: a student's set can be changed before they start");
+  const s9 = await open(juan);
+  await s9.bringToFront();   // the student's page has focus, as in a real exam
+  check(/3 questions/.test(await s9.textContent('.exam-card:has([data-start="' + q4.id + '"])')), 'student home: question count of their own set');
+  await s9.click('[data-start="' + q4.id + '"]'); await s9.click('#ov-ok'); await s9.waitForTimeout(500);
+  const v9 = await s9.textContent('#view');
+  check(/Set A$/.test((await s9.textContent('#et-title')).trim()) && /Set A only/.test(v9) && !/Set B only/.test(v9), 'student sees only the questions of their set', await s9.textContent('#et-title'));
+  const q9 = await s9.$$eval('.q-card', (els) => els.map((e) => e.dataset.q));
+  const psId = (await s9.$$eval('input[data-photo]', (els) => els.map((e) => e.dataset.photo)))[0];
+  check(!!psId && (await s9.$$('input[data-photo]')).length === 1, 'photo button only on the problem-solving question');
+  await s9.setInputFiles('input[data-photo="' + psId + '"]', require('path').join(__dirname, 'fixture.png')); await s9.waitForTimeout(700);
+  const saved = Object.values(H.drive.files);
+  check(await s9.$('.photo-item img') !== null && saved.length === 1 && saved[0]._folder.getName().includes('Quiz 4') && saved[0]._folder._parent.getName() === 'Online Exam Photos',
+    'photo uploaded and saved in the Drive folder for the exam', saved.map((f) => f._blob.getName()).join(','));
+  // the photo picker takes the student off the page: logged, not counted
+  const chooser = s9.waitForEvent('filechooser'); await s9.click('.photo-pick'); await chooser;   // the picker stays open, as on a phone
+  await hide(s9, true); await s9.waitForTimeout(300); await hide(s9, false); await s9.waitForTimeout(500);
+  check(await s9.isHidden('#overlay') && !(await s9.textContent('#leftbadge')), 'leaving for the photo picker does not count');
+  await s9.waitForTimeout(1700);
+  await hide(s9, true); await s9.waitForTimeout(300); await hide(s9, false); await s9.waitForTimeout(500);
+  check(/recorded \(1 of 3\)/.test(await s9.textContent('#ov-text')), 'leaving after the picker closed counts as usual', await s9.textContent('#ov-text'));
+  await s9.click('#ov-ok');
+  await s9.click('.q-card[data-q="' + q9[0] + '"] label:has-text("B.")');
+  await s9.fill('[data-idans="' + q9[1] + '"]', 'paris');
+  await s9.fill('[data-final="' + q9[2] + '"]', '5');
+  await s9.screenshot({ path: out + '/s-sets-photo.png', fullPage: true });
+  await s9.click('#submit'); await s9.click('#ov-ok'); await s9.waitForTimeout(600);
+  const maria2 = await open('2026-100002@rtu.edu.ph');
+  await maria2.click('[data-start="' + q4.id + '"]'); await maria2.click('#ov-ok'); await maria2.waitForTimeout(500);
+  check(/Set B$/.test((await maria2.textContent('#et-title')).trim()) && /Set B only/.test(await maria2.textContent('#view')), 'the student given Set B by hand gets Set B');
+  await ad.click('#r-refresh'); await ad.waitForTimeout(700);
+  const row9 = (await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ")')).replace(/\s+/g, ' ');
+  check(/4 \/ 4/.test(row9), 'graded on their own set only (4 / 4 in Set A)', row9);
+  await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300);
+  await ad.click('[data-showphotos]'); await ad.waitForTimeout(500);
+  const d9 = (await ad.textContent('#r-body .detail')).replace(/\s+/g, ' ');
+  check(await ad.$('#r-body .photo-view img') !== null && /Set A only/.test(d9) && !/Set B only/.test(d9) && /in the photo picker/.test(d9) && /added a photo/.test(d9),
+    "results: the student's set, their photo and the photo-picker log", d9.slice(0, 300));
+  await ad.screenshot({ path: out + '/a-sets-photo.png', fullPage: true });
+
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);
   await ad.selectOption('#ro-subj', 'CAL00'); await ad.waitForTimeout(100);
