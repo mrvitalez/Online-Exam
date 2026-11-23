@@ -499,6 +499,31 @@ Answer key
     "results: the student's set, their photo and the photo-picker log", d9.slice(0, 300));
   await ad.screenshot({ path: out + '/a-sets-photo.png', fullPage: true });
 
+  // ---------- focus lost briefly, not counted ----------
+  const q5 = H.as(H.ADMIN, () => H.ctx.admin_saveExam({ subject: 'MMW', title: 'Quiz 5', status: 'Published', limit: 30, maxLeave: 3, allowPhotos: true,
+    questions: [{ type: 'PS', text: '1 + 1 = ?', answer: '2', points: 1 }] }));
+  const s10 = await open(juan);
+  await s10.bringToFront();
+  await s10.click('[data-start="' + q5.id + '"]'); await s10.click('#ov-ok'); await s10.waitForTimeout(3000);
+  check(!(await s10.textContent('#leftbadge')), 'nothing counted when the exam opens normally');
+  const blur = (pg) => pg.evaluate(() => window.dispatchEvent(new Event('blur')));
+  const focus = (pg) => pg.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await s10.evaluate(() => { document.hasFocus = () => false; });
+  await blur(s10); await s10.waitForTimeout(600); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(500);
+  check(!(await s10.textContent('#leftbadge')) && await s10.isHidden('#overlay'), 'focus lost briefly (under 2 s, page visible): not counted');
+  await s10.evaluate(() => { document.hasFocus = () => false; });
+  await blur(s10); await s10.waitForTimeout(2600); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(600);
+  check(/recorded \(1 of 3\)/.test(await s10.textContent('#ov-text')), 'focus lost for more than 2 s: counted', await s10.textContent('#ov-text'));
+  await s10.click('#ov-ok');
+  const psq = (await s10.$$eval('input[data-photo]', (els) => els.map((e) => e.dataset.photo)))[0];
+  await s10.setInputFiles('input[data-photo="' + psq + '"]', require('path').join(__dirname, 'fixture.png')); await s10.waitForTimeout(700);
+  await s10.click('[data-rmphoto]'); await s10.waitForTimeout(200);
+  check(/Remove this photo\?/.test(await s10.textContent('#ov-title')), 'removing a photo asks in the page, not in a browser pop-up');
+  await s10.click('#ov-ok'); await s10.waitForTimeout(500);
+  check(!(await s10.$('.photo-item')) && /1 \/ 3/.test(await s10.textContent('#leftbadge')), 'photo removed; still only 1 departure counted', await s10.textContent('#leftbadge'));
+  const live10 = JSON.parse(H.store.get('L|' + q5.id + '|' + juan));
+  check(live10.events.some((e) => e[1] === 'focus left the page briefly (not counted)'), 'the brief focus loss is in the activity log', JSON.stringify(live10.events.map((e) => e[1])));
+
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);
   await ad.selectOption('#ro-subj', 'CAL00'); await ad.waitForTimeout(100);

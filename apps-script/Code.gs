@@ -235,7 +235,8 @@ var LOGGABLE = { 'fullscreen-exit': 'left fullscreen', copy: 'tried to copy', cu
                  'right-click': 'tried to right-click', shortcut: 'blocked shortcut',
                  // the photo picker (camera or files) takes the student off the page; it is logged, not counted as leaving
                  'photo-open': 'opened the photo picker', 'photo-away': 'in the photo picker (off the page)',
-                 'photo-back': 'back from the photo picker', 'photo-late': 'stayed in the photo picker too long' };
+                 'photo-back': 'back from the photo picker', 'photo-late': 'stayed in the photo picker too long',
+                 'brief-blur': 'focus left the page briefly (not counted)' };
 
 function api_event(examId, type, detail, answers) {
   return withLive_(examId, function (live, exam) {

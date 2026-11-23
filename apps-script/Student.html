@@ -196,7 +196,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       clearInterval(timerId); timerId = setInterval(tick, 500); tick();
       clearInterval(saveId); saveId = setInterval(autosave, 20000);
       monitoring = true;
-      if (document.hidden || !document.hasFocus()) leave("not focused when the exam started");
+      keepScreenOn();
+      // the page may take a moment to get the focus after it opens: only count it if it still has none after 2.5 s
+      setTimeout(function () { if (monitoring && !done && (document.hidden || !document.hasFocus())) leave("not on the exam page after it opened"); }, 2500);
     }).catch(function (e) { toast(e.message, true); reloadHome(); });
   }
 
@@ -369,6 +371,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     });
   }
   function finish(d, msg) {
+    try { if (wakeLock) wakeLock.release(); } catch (e) { /* already released */ }
     done = true; monitoring = false;
     clearInterval(timerId); clearInterval(saveId);
     if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
@@ -450,10 +453,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     }
     var rm = e.target.closest && e.target.closest("[data-rmphoto]");
     if (rm) {
-      if (!confirm("Remove this photo?")) return;
-      rm.disabled = true;
-      call("api_removePhoto", exam.id, rm.dataset.q, rm.dataset.rmphoto).then(function (r) { photos[rm.dataset.q] = r.photos; drawPhotos(rm.dataset.q); })
-        .catch(function (err) { rm.disabled = false; toast(err.message, true); });
+      // the site's own box: a browser pop-up (confirm) would take the focus and count as leaving the page
+      overlay("Remove this photo?", "The photo will be deleted from your answer.", "Remove", function () {
+        rm.disabled = true;
+        call("api_removePhoto", exam.id, rm.dataset.q, rm.dataset.rmphoto).then(function (r) { photos[rm.dataset.q] = r.photos; drawPhotos(rm.dataset.q); })
+          .catch(function (err) { rm.disabled = false; toast(err.message, true); });
+      }, true);
     }
   });
   view.addEventListener("cancel", function (e) { if (e.target.dataset && e.target.dataset.photo !== undefined) endPicking(); }, true);
@@ -504,9 +509,37 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         "Back to the exam", function () { if (fullscreenWorks) goFullscreen(); });
     }).catch(function () {});
   }
-  document.addEventListener("visibilitychange", function () { if (document.hidden) leave("switched tab or minimized"); else comeBack(); });
-  window.addEventListener("blur", function () { leave("clicked outside the exam"); });
-  window.addEventListener("focus", function () { if (!document.hidden) comeBack(); });
+  // Switching tabs, minimizing or locking the screen hides the page: that counts at once. Losing the focus while the
+  // page stays visible (a click on the address bar or tab strip, a pop-up notification) counts only after 2 seconds;
+  // shorter ones are logged as "focus left the page briefly".
+  var BLUR_GRACE = 2000, blurTimer = 0, blurAt = 0;
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { clearTimeout(blurTimer); blurAt = 0; leave("switched tab, minimized or screen turned off"); }
+    else { comeBack(); keepScreenOn(); }
+  });
+  window.addEventListener("blur", function () {
+    if (!monitoring || done || away || document.hidden) return;
+    blurAt = Date.now();
+    clearTimeout(blurTimer);
+    blurTimer = setTimeout(function () { blurAt = 0; if (!document.hasFocus()) leave("clicked outside the exam for more than 2 seconds"); }, BLUR_GRACE);
+  });
+  window.addEventListener("focus", function () {
+    if (blurAt && monitoring && !done && !away) {
+      clearTimeout(blurTimer);
+      call("api_event", exam.id, "brief-blur", ((Date.now() - blurAt) / 1000).toFixed(1) + "s", null).catch(function () {});
+    }
+    blurAt = 0;
+    if (!document.hidden) comeBack();
+  });
+  // Phones: ask the browser to keep the screen on during the exam (where it allows it), so it does not lock while
+  // the student works on paper. A locked screen hides the page, which counts as leaving.
+  var wakeLock = null;
+  function keepScreenOn() {
+    try {
+      if (!monitoring || done || wakeLock || !navigator.wakeLock || document.hidden) return;
+      navigator.wakeLock.request("screen").then(function (w) { wakeLock = w; w.addEventListener("release", function () { wakeLock = null; }); }).catch(function () {});
+    } catch (e) { /* not allowed here: the exam works without it */ }
+  }
   window.addEventListener("pagehide", function () { leave("closed or reloaded the page"); });
   document.addEventListener("fullscreenchange", function () {
     if (!monitoring || done || !fullscreenWorks || document.fullscreenElement) return;
