@@ -32,6 +32,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   var ED = null;             // exam being edited
   var edDirty = false;
   var parsed = null;         // last pasted questions
+  var resSaving = 0, resChain = Promise.resolve(), resSeq = 0, resMarks = {};   // saves in Results run one after another
   var resExam = "", resData = null, resSection = "", resOpen = {}, resTimer = 0, resSet = "", resPhotos = {};
   var rosterData = null, book = null, rosterFilter = { subject: "", section: "", q: "" };
 
@@ -1383,10 +1384,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   }
   function loadResults() {
     clearTimeout(resTimer);
-    var id = resExam;
+    var id = resExam, seq = resSeq;
     call("admin_results", id).then(function (d) {
       if (tab !== "results" || id !== resExam) return;
-      var editing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#r-body input");
+      // a save finished (or is running) since this refresh started: its data is older than the save, so load again
+      if (seq !== resSeq || resSaving > 0) { resTimer = setTimeout(loadResults, 1500); return; }
+      var editing = (document.activeElement && document.activeElement.closest && document.activeElement.closest("#r-body input")) ||
+        document.querySelector('#r-body [data-dirty="1"]') || resSaving > 0;   // never redraw over points that are not saved yet
       resData = d;
       Object.keys(d.exam.images || {}).forEach(function (k) { IMG[k] = d.exam.images[k]; });
       if (!editing) drawResults();
@@ -1420,13 +1424,13 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<div class="tw"><table class="data"><thead><tr><th>Student No.</th><th>Name</th><th>Block</th>' + (sets ? "<th>Set</th>" : "") + '<th>Status</th><th>Score</th><th>Final score</th><th>Remarks</th><th>Left page</th><th>Time away</th><th>Submitted</th><th></th></tr></thead><tbody>' +
       rows.map(function (r) {
         var a = r.attempt;
-        var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span>' + (a.pending ? ' <span class="pill">' + a.pending + " essay" + (a.pending > 1 ? "s" : "") + " to check</span>" : "") +
+        var st = !a ? '<span class="pill">Not started</span>' : a.status === "Submitted" ? '<span class="pill done">Submitted</span>' + (a.pending ? ' <span class="pill r-pend" data-att="' + esc(a.id) + '">' + a.pending + " essay" + (a.pending > 1 ? "s" : "") + " to check</span>" : "") +
           '<div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
           : '<span class="pill open">In progress</span>' + (a.awayNow ? ' <span class="pill bad">Away now</span>' : "");
         var main = "<tr><td>" + esc(r.no) + '</td><td class="wrap">' + esc(r.name) + (r.extra ? ' <span class="pill">not on list</span>' : "") + (r.blocked ? ' <span class="pill bad">blocked</span>' : "") +
           "</td><td>" + esc(r.section) + "</td>" + (sets ? "<td>" + (a ? '<span class="setpill">' + esc(r.set || "—") + "</span>" :
             '<select data-chset="' + esc(r.email) + '" title="Change this student\'s set before they start"><option value="">' + esc(r.set) + (r.setChosen ? "" : " (automatic)") + '</option>' +
-            '<option value="A">A</option><option value="B">B</option></select>') + "</td>" : "") + "<td>" + st + "</td><td>" + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
+            '<option value="A">A</option><option value="B">B</option></select>') + "</td>" : "") + "<td>" + st + '</td><td class="r-score" data-att="' + (a ? esc(a.id) : "") + '">' + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
           "<td>" + (a ? '<input class="score" data-final="' + esc(a.id) + '" value="' + esc(a.final) + '" placeholder="—">' : "") + "</td>" +
           "<td>" + (a ? '<input class="remarks" data-remarks="' + esc(a.id) + '" value="' + esc(a.remarks) + '">' : "") + "</td>" +
           '<td style="' + (a && a.left ? "color:var(--no);font-weight:800" : "") + '">' + (a ? a.left : "") + "</td><td>" + (a && a.away ? dur(a.away) : "") + "</td>" +
@@ -1463,22 +1467,51 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         call("admin_photos", id).then(function (ph) { resPhotos[id] = ph; drawResults(); }).catch(function (e) { busy(b, false); toast(e.message, true); });
       };
     });
-    body.querySelectorAll("[data-items]").forEach(function (b) {
-      b.onclick = function () {
-        var id = b.dataset.items, scores = {}, bad = "";
-        b.closest(".detail").querySelectorAll("[data-item]").forEach(function (inp) {
-          var v = inp.value.trim();
-          if (v !== "" && !(Number(v) >= 0 && Number(v) <= Number(inp.dataset.max))) bad = "Points must be from 0 to " + inp.dataset.max + ".";
-          scores[inp.dataset.item] = v;
-        });
-        if (bad) return toast(bad, true);
-        busy(b, true, "Saving…");
-        call("admin_saveItemScores", id, scores).then(function (na) {
+    // Points per question, final score and remarks are saved as soon as the box is left
+    var queueSave = function (fn) {
+      resSaving++; resSeq++;
+      var p = resChain.then(fn);
+      resChain = p.catch(function () {});
+      return p.then(function (x) { resSaving--; return x; }, function (e) { resSaving--; throw e; });
+    };
+    var mark = function (key, text, bad) {
+      resMarks[key] = [text, !!bad];
+      var m = body.querySelector('[data-mark="' + cssq(key) + '"]');
+      if (m) { m.textContent = text; m.className = "saved-mark" + (bad ? " bad" : ""); }
+    };
+    body.querySelectorAll("#r-body input").forEach(function (inp) {
+      inp.addEventListener("input", function () { inp.dataset.dirty = "1"; });
+      inp.addEventListener("keydown", function (e) { if (e.key === "Enter") inp.blur(); });
+    });
+    body.querySelectorAll("[data-item]").forEach(function (inp) {
+      inp.addEventListener("change", function () {
+        var id = inp.dataset.att, qid = inp.dataset.item, v = inp.value.trim(), key = id + "|" + qid;
+        if (v !== "" && !(Number(v) >= 0 && Number(v) <= Number(inp.dataset.max))) { mark(key, "Points must be 0 to " + inp.dataset.max, true); return toast("Points must be from 0 to " + inp.dataset.max + ".", true); }
+        mark(key, "saving…");
+        var scores = {}; scores[qid] = v;
+        queueSave(function () { return call("admin_saveItemScores", id, scores); }).then(function (na) {
+          delete inp.dataset.dirty;
           d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { na.row = r.attempt.row; r.attempt = na; } });
-          toast("Points saved. Score: " + na.score + " / " + na.total + (na.pending ? " (" + na.pending + " essay" + (na.pending > 1 ? "s" : "") + " still to check)" : "") + ".");
-          drawResults();
-        }).catch(function (e) { busy(b, false); toast(e.message, true); });
-      };
+          mark(key, v === "" ? "✓ automatic score" : "✓ saved");
+          var cell = body.querySelector('.r-score[data-att="' + cssq(id) + '"]');
+          if (cell) cell.textContent = na.score + " / " + na.total;
+          var pend = body.querySelector('.r-pend[data-att="' + cssq(id) + '"]');
+          if (pend) { if (na.pending) pend.textContent = na.pending + " essay" + (na.pending > 1 ? "s" : "") + " to check"; else pend.remove(); }
+          toast("Saved. Score: " + na.score + " / " + na.total + (na.pending ? " (" + na.pending + " essay" + (na.pending > 1 ? "s" : "") + " still to check)" : "") + ".");
+        }).catch(function (e) { mark(key, "not saved", true); toast("Could not save the points: " + e.message, true); });
+      });
+    });
+    var saveRow = function (id) {
+      var fIn = body.querySelector('[data-final="' + cssq(id) + '"]'), rIn = body.querySelector('[data-remarks="' + cssq(id) + '"]');
+      var f = fIn.value, rm = rIn.value;
+      return queueSave(function () { return call("admin_saveResult", id, f, rm); }).then(function () {
+        delete fIn.dataset.dirty; delete rIn.dataset.dirty;
+        d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { r.attempt.final = f; r.attempt.remarks = rm; } });
+        toast("Saved.");
+      }).catch(function (e) { toast(e.message, true); });
+    };
+    body.querySelectorAll("[data-final], [data-remarks]").forEach(function (inp) {
+      inp.addEventListener("change", function () { saveRow(inp.dataset.final || inp.dataset.remarks); });
     });
     body.querySelectorAll("[data-retake]").forEach(function (b) {
       b.onclick = function () {
@@ -1502,8 +1535,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       var border = it.pending ? "var(--amber-line)" : q.type === "ES" || partial ? "var(--line)" : it.ok ? "var(--ok-bd)" : "var(--no-bd)";
       var given = a.manual && a.manual[q.id] !== undefined ? a.manual[q.id] : "";
       html += '<div class="qedit" style="border-color:' + border + '"><div class="qe-head"><b>Q' + (i + 1) + "</b><span class=\"pill\">" + typeName(q.type) + "</span><span>" + mark + "</span>" +
-        '<span style="flex:1"></span><label class="check" title="Leave blank to use the automatic score">Points <input class="score" data-item="' + esc(q.id) + '" data-max="' + q.points + '" value="' + esc(given) + '" placeholder="' +
-        (q.type === "ES" ? "—" : esc(it.got || 0)) + '"> / ' + q.points + "</label></div>" + '<div class="rendered">' + rich(q.text) + "</div>";
+        '<span style="flex:1"></span><label class="check" title="Leave blank to use the automatic score">Points <input class="score" data-item="' + esc(q.id) + '" data-att="' + esc(a.id) + '" data-max="' + q.points + '" value="' + esc(given) + '" placeholder="' +
+        (q.type === "ES" ? "—" : esc(it.got || 0)) + '"> / ' + q.points + '</label><span class="saved-mark' + ((resMarks[a.id + "|" + q.id] || [])[1] ? " bad" : "") + '" data-mark="' + esc(a.id) + "|" + esc(q.id) + '">' +
+        esc((resMarks[a.id + "|" + q.id] || [""])[0]) + "</span></div>" + '<div class="rendered">' + rich(q.text) + "</div>";
       if (q.type === "ID") {
         html += "<p>Answer: <b>" + esc(mine || "(blank)") + "</b> · Accepted: <b>" + esc(String(q.answer).split("|").map(function (k) { return k.trim(); }).join(", ")) + "</b></p>";
       } else if (q.type === "ES") {
@@ -1525,8 +1559,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
         return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + (f.data ? '<img src="' + f.data + '" alt="Photo">' : "Photo (open in Drive)") + "</a>"; }).join("") + "</div>";
       html += "</div>";
     });
-    html += '<div class="btnrow" style="align-items:center"><button class="btn small" data-items="' + esc(a.id) + '">Save points</button>' +
-      '<span class="muted">Type points to score essays, or to change the automatic score of any question (for example, to accept a misspelled answer). Leave blank for the automatic score.</span></div>';
+    html += '<p class="muted">Type points in a question\'s box to score an essay or to correct the automatic score (for example, to accept a misspelled answer). ' +
+      "The points are saved as soon as you leave the box (Enter, Tab or a click elsewhere). Clear the box to go back to the automatic score.</p>";
     html += "</div><div><h3>Activity log</h3><p class=\"muted\">Started " + when(a.started) + "<br>Deadline " + when(a.deadline) + "</p><ul class=\"ev-list\">" + (a.events || []).map(function (e) {
       var bad = /left|tried|blocked|fullscreen/.test(e[1]);
       return "<li><span class=\"muted\">" + new Date(e[0]).toLocaleTimeString("en-PH", { timeZone: "Asia/Manila" }) + "</span> · <span class=\"" + (bad ? "bad" : "") + "\">" + esc(e[1]) + "</span>" + (e[2] ? " <span class=\"muted\">(" + esc(e[2]) + ")</span>" : "") + "</li>";

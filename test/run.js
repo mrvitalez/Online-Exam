@@ -370,9 +370,10 @@ Answer key
   await ad.selectOption('#r-exam', quiz.id); await ad.waitForTimeout(700);
   check(/1 essay to check/.test(await ad.textContent('#r-body')), 'results: essay to check is flagged');
   await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300);
-  await ad.fill(`[data-item="${quiz.questions[2].id}"]`, '8');
-  await ad.fill(`[data-item="${quiz.questions[1].id}"]`, '1');   // accept "theory" by hand
-  await ad.click('[data-items]'); await ad.waitForTimeout(600);
+  await ad.fill(`[data-item="${quiz.questions[2].id}"]`, '8'); await ad.press(`[data-item="${quiz.questions[2].id}"]`, 'Tab');
+  await ad.waitForTimeout(500);
+  await ad.fill(`[data-item="${quiz.questions[1].id}"]`, '1'); await ad.press(`[data-item="${quiz.questions[1].id}"]`, 'Enter');   // accept "theory" by hand
+  await ad.waitForTimeout(600);
   check(/Score: 11 \/ 13/.test(await ad.textContent('#toast')), 'results: essay points and an override saved', await ad.textContent('#toast'));
   const row5 = (await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ")')).replace(/\s+/g, ' ');
   check(/11 \/ 13/.test(row5) && !/to check/.test(row5), 'results: score updated, nothing left to check', row5);
@@ -523,6 +524,23 @@ Answer key
   check(!(await s10.$('.photo-item')) && /1 \/ 3/.test(await s10.textContent('#leftbadge')), 'photo removed; still only 1 departure counted', await s10.textContent('#leftbadge'));
   const live10 = JSON.parse(H.store.get('L|' + q5.id + '|' + juan));
   check(live10.events.some((e) => e[1] === 'focus left the page briefly (not counted)'), 'the brief focus loss is in the activity log', JSON.stringify(live10.events.map((e) => e[1])));
+
+  // ---------- correcting an automatic score (problem solving, identification) survives a refresh ----------
+  await ad.selectOption('#r-exam', q3.id); await ad.waitForTimeout(700);
+  await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300);
+  const q3second = H.ctx.questions_(q3.id)[1].id;
+  await ad.fill('[data-item="' + q3second + '"]', '4');            // was 2.5 / 5 automatically
+  await ad.click('#r-refresh'); await ad.waitForTimeout(800);       // a refresh while the box is not saved yet
+  check(await ad.inputValue('[data-item="' + q3second + '"]') === '4', 'a refresh does not wipe points that are being typed');
+  await ad.press('[data-item="' + q3second + '"]', 'Tab'); await ad.waitForTimeout(600);
+  check(/✓ saved/.test(await ad.textContent('[data-mark$="|' + q3second + '"]')) && /10 \/ 11/.test(await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score')),
+    'problem-solving points corrected by hand are saved when the box is left', await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score'));
+  await ad.click('#r-refresh'); await ad.waitForTimeout(800);
+  check(await ad.inputValue('[data-item="' + q3second + '"]') === '4' && /10 \/ 11/.test(await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score')), 'the corrected score is still there after a refresh');
+  await ad.fill('#r-body tbody tr:has-text("DELA CRUZ") input.remarks', 'checked by hand'); await ad.press('#r-body tbody tr:has-text("DELA CRUZ") input.remarks', 'Tab'); await ad.waitForTimeout(500);
+  check(H.ss.getSheetByName('Attempts').data.find((r) => r[1] === q3.id && r[4] === juan)[16] === 'checked by hand', 'remarks are saved when the box is left');
+  await ad.fill('[data-item="' + q3second + '"]', ''); await ad.press('[data-item="' + q3second + '"]', 'Tab'); await ad.waitForTimeout(600);
+  check(/automatic/.test(await ad.textContent('[data-mark$="|' + q3second + '"]')) && /8\.5 \/ 11/.test(await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score')), 'clearing the box goes back to the automatic score');
 
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);
