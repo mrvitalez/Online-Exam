@@ -509,11 +509,11 @@ Answer key
   const blur = (pg) => pg.evaluate(() => window.dispatchEvent(new Event('blur')));
   const focus = (pg) => pg.evaluate(() => window.dispatchEvent(new Event('focus')));
   await s10.evaluate(() => { document.hasFocus = () => false; });
-  await blur(s10); await s10.waitForTimeout(600); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(500);
-  check(!(await s10.textContent('#leftbadge')) && await s10.isHidden('#overlay'), 'focus lost briefly (under 2 s, page visible): not counted');
+  await blur(s10); await s10.waitForTimeout(8000); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(500);
+  check(!(await s10.textContent('#leftbadge')) && await s10.isHidden('#overlay'), 'focus lost briefly (under 10 s, page visible): not counted');
   await s10.evaluate(() => { document.hasFocus = () => false; });
-  await blur(s10); await s10.waitForTimeout(2600); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(600);
-  check(/recorded \(1 of 3\)/.test(await s10.textContent('#ov-text')), 'focus lost for more than 2 s: counted', await s10.textContent('#ov-text'));
+  await blur(s10); await s10.waitForTimeout(10600); await s10.evaluate(() => { delete document.hasFocus; }); await focus(s10); await s10.waitForTimeout(600);
+  check(/recorded \(1 of 3\)/.test(await s10.textContent('#ov-text')), 'focus lost for more than 10 s: counted', await s10.textContent('#ov-text'));
   await s10.click('#ov-ok');
   const psq = (await s10.$$eval('input[data-photo]', (els) => els.map((e) => e.dataset.photo)))[0];
   await s10.setInputFiles('input[data-photo="' + psq + '"]', require('path').join(__dirname, 'fixture.png')); await s10.waitForTimeout(700);

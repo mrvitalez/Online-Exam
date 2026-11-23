@@ -510,9 +510,9 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     }).catch(function () {});
   }
   // Switching tabs, minimizing or locking the screen hides the page: that counts at once. Losing the focus while the
-  // page stays visible (a click on the address bar or tab strip, a pop-up notification) counts only after 2 seconds;
+  // page stays visible (a click on the address bar or tab strip, a pop-up notification) counts only after 10 seconds;
   // shorter ones are logged as "focus left the page briefly".
-  var BLUR_GRACE = 2000, blurTimer = 0, blurAt = 0;
+  var BLUR_GRACE = 10000, blurTimer = 0, blurAt = 0;
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) { clearTimeout(blurTimer); blurAt = 0; leave("switched tab, minimized or screen turned off"); }
     else { comeBack(); keepScreenOn(); }
@@ -521,7 +521,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     if (!monitoring || done || away || document.hidden) return;
     blurAt = Date.now();
     clearTimeout(blurTimer);
-    blurTimer = setTimeout(function () { blurAt = 0; if (!document.hasFocus()) leave("clicked outside the exam for more than 2 seconds"); }, BLUR_GRACE);
+    blurTimer = setTimeout(function () { blurAt = 0; if (!document.hasFocus()) leave("clicked outside the exam for more than 10 seconds"); }, BLUR_GRACE);
   });
   window.addEventListener("focus", function () {
     if (blurAt && monitoring && !done && !away) {
