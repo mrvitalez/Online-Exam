@@ -108,7 +108,7 @@ Answer key
     const p = await ctxB.newPage();
     p.on('pageerror', (e) => errors.push(email + ': ' + e.message));
     p.on('dialog', (d) => d.accept());
-    await p.goto(base + '?as=' + encodeURIComponent(email) + (admin ? '&page=admin' : ''));
+    await p.goto(base + '?as=' + encodeURIComponent(email) + (admin === 'check' ? '&page=check' : admin ? '&page=admin' : ''));
     await p.waitForTimeout(300);
     return p;
   };
@@ -541,6 +541,55 @@ Answer key
   check(H.ss.getSheetByName('Attempts').data.find((r) => r[1] === q3.id && r[4] === juan)[16] === 'checked by hand', 'remarks are saved when the box is left');
   await ad.fill('[data-item="' + q3second + '"]', ''); await ad.press('[data-item="' + q3second + '"]', 'Tab'); await ad.waitForTimeout(600);
   check(/automatic/.test(await ad.textContent('[data-mark$="|' + q3second + '"]')) && /8\.5 \/ 11/.test(await ad.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score')), 'clearing the box goes back to the automatic score');
+
+  // ---------- checkers ----------
+  const CK = '2026-500001@rtu.edu.ph';
+  const calExam = H.as(H.ADMIN, () => H.ctx.admin_saveExam({ subject: 'CAL00', title: 'CAL quiz', status: 'Published', limit: 30,
+    questions: [{ type: 'ID', text: 'x', answer: 'y', points: 1 }] }));
+  await ad.reload(); await ad.waitForTimeout(400);
+  await ad.click('[data-tab=settings]'); await ad.waitForTimeout(200);
+  check(/\?page=check/.test(await ad.textContent('#view')), 'settings: the checker link is shown');
+  await ad.fill('#ck-email', CK); await ad.click('#ck-add'); await ad.waitForTimeout(500);
+  await ad.uncheck('[data-ckall="0"]'); await ad.waitForTimeout(500);
+  await ad.check('[data-cksub="0"][value="MMW"]'); await ad.waitForTimeout(300);
+  await ad.uncheck('[data-cksub="0"][value="' + (await ad.$$eval('[data-cksub="0"]', (els) => els.map((e) => e.value).find((v) => v !== 'MMW'))) + '"]').catch(() => {});
+  await ad.waitForTimeout(500);
+  const ckSaved = JSON.parse(H.ctx.settings_(true).checkers);
+  check(ckSaved.length === 1 && ckSaved[0].email === CK && ckSaved[0].subjects.join() === 'MMW', 'settings: checker added, limited to MMW', JSON.stringify(ckSaved));
+  await ad.screenshot({ path: out + '/a-checkers.png', fullPage: true });
+
+  const ck = await open(CK, 'check');
+  check((await ck.$$eval('#tabs button', (b) => b.map((x) => x.textContent))).join() === '📊 Results', 'checker page: only the Results tab');
+  const ckExams = await ck.$$eval('#r-exam option', (o) => o.map((x) => x.textContent));
+  check(ckExams.length && ckExams.every((t) => t.startsWith('MMW')) && !ckExams.some((t) => /CAL quiz|Sample exam/.test(t)), 'checker sees only published exams of their subjects', ckExams.join(' | '));
+  await ck.selectOption('#r-exam', q3.id); await ck.waitForTimeout(700);
+  check(!(await ck.$('#r-regrade')) && !(await ck.$('[data-retake]')) && !(await ck.$('input[data-final]')), 'checker: no re-grade, retake or final score boxes');
+  await ck.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ck.waitForTimeout(300);
+  await ck.fill('[data-item="' + q3second + '"]', '5'); await ck.press('[data-item="' + q3second + '"]', 'Tab'); await ck.waitForTimeout(600);
+  check(/11 \/ 11/.test(await ck.textContent('#r-body tbody tr:has-text("DELA CRUZ") .r-score')), 'checker gives points per question');
+  await ck.fill('#r-body tbody tr:has-text("DELA CRUZ") input.remarks', 'checked by assistant'); await ck.press('#r-body tbody tr:has-text("DELA CRUZ") input.remarks', 'Tab'); await ck.waitForTimeout(500);
+  await ck.screenshot({ path: out + '/c-checker.png', fullPage: true });
+  const attRow = H.ss.getSheetByName('Attempts').data.find((r) => r[1] === q3.id && r[4] === juan);
+  check(attRow[16] === 'checked by assistant' && attRow[15] === '', 'checker writes remarks; the final score stays the instructor\'s', JSON.stringify([attRow[15], attRow[16]]));
+  const tryAs = (email, fn) => { try { H.as(email, fn); return 'allowed'; } catch (e) { return e.message; } };
+  check(/not a checker for CAL00/.test(tryAs(CK, () => H.ctx.admin_results(calExam.id))), 'server: checker cannot open another subject', tryAs(CK, () => H.ctx.admin_results(calExam.id)));
+  check(/Instructors only/.test(tryAs(CK, () => H.ctx.admin_allowRetake(attRow[0]))) && /Instructors only/.test(tryAs(CK, () => H.ctx.admin_load())) &&
+    /Instructors only/.test(tryAs(CK, () => H.ctx.admin_saveExam({ subject: 'MMW', title: 'x', limit: 5 }))) && /Instructors only/.test(tryAs(CK, () => H.ctx.admin_regrade(q3.id))),
+    'server: checker cannot retake, re-grade, edit exams or open the admin data');
+  H.as(CK, () => H.ctx.admin_saveResult(attRow[0], '99', 'checked by assistant'));
+  check(H.ss.getSheetByName('Attempts').data.find((r) => r[0] === attRow[0])[15] === '', 'server: a final score sent by a checker is ignored');
+  check(/Only the instructor and their checkers/.test(tryAs('2026-100002@rtu.edu.ph', () => H.ctx.check_load())), 'server: a student cannot open the checker page');
+  // the instructor sees who corrected what, and can open the checker page too
+  await ad.click('[data-tab=results]'); await ad.waitForTimeout(400);
+  await ad.selectOption('#r-exam', q3.id); await ad.waitForTimeout(800);
+  if (!(await ad.$('#r-body .detail'))) { await ad.click('#r-body tbody tr:has-text("DELA CRUZ") [data-open]'); await ad.waitForTimeout(300); }
+  const corr = (await ad.textContent('#r-body .detail')).replace(/\s+/g, ' ');
+  check(new RegExp(CK.replace(/[.]/g, '\\.') + ' · Q2: 5 / 5 points').test(corr) && /remarks: checked by assistant/.test(corr), 'results: corrections list shows the checker\'s changes', corr.slice(corr.indexOf('Corrections'), corr.indexOf('Corrections') + 300));
+  const me = await open(H.ADMIN, 'check');
+  const meExams = await me.$$eval('#r-exam option', (o) => o.map((x) => x.textContent));
+  check((await me.$$eval('#tabs button', (b) => b.length)) === 1 && meExams.some((t) => /CAL quiz/.test(t)) && /This is what your checkers see/.test(await me.textContent('.hero')), 'instructor can open the checker page (all subjects)');
+  H.as(H.ADMIN, () => H.ctx.admin_deleteExam(calExam.id));   // not needed by the tests below
+  await ad.reload(); await ad.waitForTimeout(400);
 
   // ---------- class list: remove and add ----------
   await ad.click('[data-tab=roster]'); await ad.waitForTimeout(500);

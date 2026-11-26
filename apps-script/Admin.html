@@ -26,9 +26,12 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   "use strict";
   var BOOT = window.BOOT || {};
   var A = null;              // admin_load()
-  var tab = "overview";
+  // The checker page (?page=check) is this page limited to Results: points per question and remarks only
+  var CHECKER = BOOT.role === "checker";
+  var tab = CHECKER ? "results" : "overview";
   var view = document.getElementById("view");
-  var TABS = [["overview", "📋 Overview"], ["exams", "📝 Exams"], ["results", "📊 Results"], ["roster", "🧑‍🎓 Class list"], ["settings", "⚙️ Settings"]];
+  var TABS = CHECKER ? [["results", "📊 Results"]] :
+    [["overview", "📋 Overview"], ["exams", "📝 Exams"], ["results", "📊 Results"], ["roster", "🧑‍🎓 Class list"], ["settings", "⚙️ Settings"]];
   var ED = null;             // exam being edited
   var edDirty = false;
   var parsed = null;         // last pasted questions
@@ -39,6 +42,17 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
   document.getElementById("who").textContent = "Signed in as " + (BOOT.email || "");
   document.getElementById("open-sheet").href = BOOT.sheetUrl || "#";
   document.getElementById("open-student").href = BOOT.pagesUrl || BOOT.url || "#";
+  if (CHECKER) {
+    document.querySelector(".banner").innerHTML = "✅ <b>Exam Checker</b> &nbsp;—&nbsp; checking tools<span>&nbsp;·&nbsp; Rizal Technological University</span>";
+    document.querySelector(".hero .eyebrow").textContent = "Online Exams · Checker site";
+    document.querySelector(".hero h1").textContent = "Exam checker";
+    document.querySelector(".hero p").textContent = BOOT.isAdmin
+      ? "This is what your checkers see: Results only, for their subjects. They can give points per question and write remarks. Your own admin site still has everything."
+      : "Check students' answers, solutions and photos, give points per question, and write remarks. Every change you save is recorded with your name.";
+    document.getElementById("open-student").style.display = "none";
+    if (!BOOT.isAdmin) document.getElementById("open-sheet").style.display = "none";
+    else { document.getElementById("open-sheet").textContent = "🛠️ Open the admin site"; document.getElementById("open-sheet").href = (BOOT.url || "") + "?page=admin"; }
+  }
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -1366,7 +1380,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '<label class="field" style="min-width:180px">Block section<select id="r-sec"></select></label>' +
       '<label class="field" id="r-set-wrap" style="min-width:120px" hidden>Set<select id="r-set"><option value="">All</option><option>A</option><option>B</option></select></label>' +
       '<button class="btn small ghost" id="r-refresh">Refresh</button><label class="check"><input type="checkbox" id="r-auto" checked> Update every 20 s</label>' +
-      '<button class="btn small ghost" id="r-csv">Download CSV</button><button class="btn small ghost" id="r-regrade">Re-grade all</button></div>' +
+      '<button class="btn small ghost" id="r-csv">Download CSV</button>' + (CHECKER ? "" : '<button class="btn small ghost" id="r-regrade">Re-grade all</button>') + "</div>" +
       '<div id="r-body"><div class="loading"><div class="spinner"></div>Loading…</div></div></section>';
     if (!opts.length) { document.getElementById("r-body").innerHTML = '<p class="muted">No exams yet.</p>'; return; }
     document.getElementById("r-exam").onchange = function () { resExam = this.value; resSection = ""; resOpen = {}; loadResults(); };
@@ -1375,7 +1389,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     document.getElementById("r-refresh").onclick = function () { loadResults(); };
     document.getElementById("r-auto").onchange = function () { clearTimeout(resTimer); if (this.checked) loadResults(); };
     document.getElementById("r-csv").onclick = csv;
-    document.getElementById("r-regrade").onclick = function () {
+    if (document.getElementById("r-regrade")) document.getElementById("r-regrade").onclick = function () {
       var b = this; busy(b, true, "Re-grading…");
       call("admin_regrade", resExam).then(function (d) { busy(b, false); toast(d.updated ? d.updated + " scores updated in the Attempts sheet." : "All scores were already up to date."); loadResults(); })
         .catch(function (e) { busy(b, false); toast(e.message, true); });
@@ -1428,14 +1442,14 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
           '<div class="muted" style="font-size:.75rem">' + esc(a.how) + "</div>"
           : '<span class="pill open">In progress</span>' + (a.awayNow ? ' <span class="pill bad">Away now</span>' : "");
         var main = "<tr><td>" + esc(r.no) + '</td><td class="wrap">' + esc(r.name) + (r.extra ? ' <span class="pill">not on list</span>' : "") + (r.blocked ? ' <span class="pill bad">blocked</span>' : "") +
-          "</td><td>" + esc(r.section) + "</td>" + (sets ? "<td>" + (a ? '<span class="setpill">' + esc(r.set || "—") + "</span>" :
+          "</td><td>" + esc(r.section) + "</td>" + (sets ? "<td>" + (a || CHECKER ? '<span class="setpill">' + esc(r.set || "—") + "</span>" :
             '<select data-chset="' + esc(r.email) + '" title="Change this student\'s set before they start"><option value="">' + esc(r.set) + (r.setChosen ? "" : " (automatic)") + '</option>' +
             '<option value="A">A</option><option value="B">B</option></select>') + "</td>" : "") + "<td>" + st + '</td><td class="r-score" data-att="' + (a ? esc(a.id) : "") + '">' + (a ? esc(a.score) + " / " + esc(a.total) : "") + "</td>" +
-          "<td>" + (a ? '<input class="score" data-final="' + esc(a.id) + '" value="' + esc(a.final) + '" placeholder="—">' : "") + "</td>" +
+          "<td>" + (a ? (CHECKER ? esc(a.final === "" || a.final == null ? "—" : a.final) : '<input class="score" data-final="' + esc(a.id) + '" value="' + esc(a.final) + '" placeholder="—">') : "") + "</td>" +
           "<td>" + (a ? '<input class="remarks" data-remarks="' + esc(a.id) + '" value="' + esc(a.remarks) + '">' : "") + "</td>" +
           '<td style="' + (a && a.left ? "color:var(--no);font-weight:800" : "") + '">' + (a ? a.left : "") + "</td><td>" + (a && a.away ? dur(a.away) : "") + "</td>" +
           "<td>" + (a && a.submitted ? when(a.submitted) : "") + "</td><td>" + (a ? '<div class="row-actions"><button class="btn small" data-save="' + esc(a.id) + '">Save</button>' +
-          '<button class="btn small ghost" data-open="' + esc(a.id) + '">' + (resOpen[a.id] ? "Hide" : "Answers") + '</button><button class="btn small danger" data-retake="' + esc(a.id) + '">Retake</button></div>' : "") + "</td></tr>";
+          '<button class="btn small ghost" data-open="' + esc(a.id) + '">' + (resOpen[a.id] ? "Hide" : "Answers") + '</button>' + (CHECKER ? "" : '<button class="btn small danger" data-retake="' + esc(a.id) + '">Retake</button>') + "</div>" : "") + "</td></tr>";
         return main + (a && resOpen[a.id] ? '<tr class="detail"><td colspan="' + (sets ? 12 : 11) + '"><div class="detail-wrap">' + detail(a, x) + "</div></td></tr>" : "");
       }).join("") + "</tbody></table></div>";
     body.querySelectorAll("[data-open]").forEach(function (b) { b.onclick = function () { resOpen[b.dataset.open] = !resOpen[b.dataset.open]; drawResults(); }; });
@@ -1503,9 +1517,11 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     });
     var saveRow = function (id) {
       var fIn = body.querySelector('[data-final="' + cssq(id) + '"]'), rIn = body.querySelector('[data-remarks="' + cssq(id) + '"]');
-      var f = fIn.value, rm = rIn.value;
+      var row = d.rows.filter(function (r) { return r.attempt && r.attempt.id === id; })[0];
+      var f = fIn ? fIn.value : (row ? row.attempt.final : ""), rm = rIn.value;   // checkers have no final score box
       return queueSave(function () { return call("admin_saveResult", id, f, rm); }).then(function () {
-        delete fIn.dataset.dirty; delete rIn.dataset.dirty;
+        if (fIn) delete fIn.dataset.dirty;
+        delete rIn.dataset.dirty;
         d.rows.forEach(function (r) { if (r.attempt && r.attempt.id === id) { r.attempt.final = f; r.attempt.remarks = rm; } });
         toast("Saved.");
       }).catch(function (e) { toast(e.message, true); });
@@ -1561,6 +1577,8 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     });
     html += '<p class="muted">Type points in a question\'s box to score an essay or to correct the automatic score (for example, to accept a misspelled answer). ' +
       "The points are saved as soon as you leave the box (Enter, Tab or a click elsewhere). Clear the box to go back to the automatic score.</p>";
+    if ((a.changes || []).length) html += '<h3>Corrections</h3><ul class="ev-list">' + a.changes.slice().reverse().map(function (c) {
+      return '<li><span class="muted">' + when(c[0]) + "</span> · <b>" + esc(c[1]) + "</b> · " + esc(c[2]) + "</li>"; }).join("") + "</ul>";
     html += "</div><div><h3>Activity log</h3><p class=\"muted\">Started " + when(a.started) + "<br>Deadline " + when(a.deadline) + "</p><ul class=\"ev-list\">" + (a.events || []).map(function (e) {
       var bad = /left|tried|blocked|fullscreen/.test(e[1]);
       return "<li><span class=\"muted\">" + new Date(e[0]).toLocaleTimeString("en-PH", { timeZone: "Asia/Manila" }) + "</span> · <span class=\"" + (bad ? "bad" : "") + "\">" + esc(e[1]) + "</span>" + (e[2] ? " <span class=\"muted\">(" + esc(e[2]) + ")</span>" : "") + "</li>";
@@ -1720,7 +1738,56 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
       '</div><div class="btnrow" style="margin-top:12px"><button class="btn" id="s-save">Save settings</button></div>' +
       "<h3>Links</h3><p>Student link (GitHub Pages, opens the web app): <a target=\"_blank\" rel=\"noopener\" href=\"" + esc(A.pagesUrl) + '">' + esc(A.pagesUrl) + "</a><br>" +
       'Google Sheet with all the data: <a target="_blank" rel="noopener" href="' + esc(A.sheetUrl) + '">open</a></p>' +
-      '<p class="muted">Who can open this admin site is set in Code.gs (CONFIG.ADMIN_EMAILS). Students are recognised by their student-number email (@rtu.edu.ph).</p></section>';
+      '<p class="muted">Who can open this admin site is set in Code.gs (CONFIG.ADMIN_EMAILS). Students are recognised by their student-number email (@rtu.edu.ph).</p></section>' +
+      '<section class="ch"><h2>✅ Checkers</h2><p class="lead">People who help you check. They open the <b>checker page</b> and see only <b>Results</b>, for the subjects you choose. ' +
+      "They can see students' answers, solutions and photos, give points per question and write remarks. They cannot edit exams or the class list, set the final score, " +
+      "allow retakes or re-grade. Every change they save is listed under <b>Corrections</b> in Results, with their email.</p>" +
+      (A.studentUrl ? '<p>Checker page (send this link to your checkers; you can open it too): <a target="_blank" rel="noopener" href="' + esc(A.studentUrl + "?page=check") + '">' +
+        esc(A.studentUrl) + "?page=check</a></p>" : '<div class="notice">Save the web app address above first, so the checker link can be shown.</div>') +
+      '<div id="ck-list"></div>' +
+      '<div class="btnrow" style="align-items:flex-end;margin-top:12px"><label class="field" style="min-width:260px">Checker\'s email<input type="text" id="ck-email" placeholder="2026-100001@rtu.edu.ph"></label>' +
+      '<button class="btn" id="ck-add">Add checker</button></div></section>';
+    var checkers = [];
+    try { checkers = JSON.parse(s.checkers || "[]"); } catch (e) { checkers = []; }
+    var subs = subjectsList();
+    var saveCk = function (msg) {
+      return call("admin_saveCheckers", checkers).then(function (d) { A = d; toast(msg); drawCk(); })
+        .catch(function (e) { toast(e.message, true); try { checkers = JSON.parse(A.settings.checkers || "[]"); } catch (x) { checkers = []; } drawCk(); });
+    };
+    function drawCk() {
+      var box = document.getElementById("ck-list");
+      box.innerHTML = checkers.length ? '<div class="tw"><table class="data"><thead><tr><th>Checker</th><th>Subjects they may check</th><th></th></tr></thead><tbody>' +
+        checkers.map(function (c, i) {
+          return "<tr><td>" + esc(c.email) + '</td><td class="wrap"><div class="btnrow">' +
+            '<label class="check"><input type="checkbox" data-ckall="' + i + '"' + (!c.subjects.length ? " checked" : "") + "> All subjects</label>" +
+            subs.map(function (x) {
+              return '<label class="check"><input type="checkbox" data-cksub="' + i + '" value="' + esc(x) + '"' + (c.subjects.indexOf(x) >= 0 ? " checked" : "") +
+                (!c.subjects.length ? " disabled" : "") + "> " + esc(x) + "</label>"; }).join("") +
+            '</div></td><td><button class="btn small danger" data-ckrm="' + i + '">Remove</button></td></tr>';
+        }).join("") + "</tbody></table></div>" : '<p class="muted">No checkers yet.</p>';
+      box.querySelectorAll("[data-ckall]").forEach(function (cb) {
+        cb.onchange = function () { var c = checkers[cb.dataset.ckall]; c.subjects = cb.checked ? [] : subs.slice(0, 1); saveCk(cb.checked ? "Can check every subject." : "Choose the subjects."); };
+      });
+      box.querySelectorAll("[data-cksub]").forEach(function (cb) {
+        cb.onchange = function () {
+          var c = checkers[cb.dataset.cksub];
+          c.subjects = [].slice.call(box.querySelectorAll('[data-cksub="' + cb.dataset.cksub + '"]:checked')).map(function (x) { return x.value; });
+          if (!c.subjects.length) { toast("Choose at least one subject, or tick All subjects.", true); cb.checked = true; c.subjects = [cb.value]; return; }
+          saveCk("Saved.");
+        };
+      });
+      box.querySelectorAll("[data-ckrm]").forEach(function (b) {
+        b.onclick = function () { if (!confirm("Remove " + checkers[b.dataset.ckrm].email + " as a checker?")) return; checkers.splice(Number(b.dataset.ckrm), 1); saveCk("Checker removed."); };
+      });
+    }
+    drawCk();
+    document.getElementById("ck-add").onclick = function () {
+      var email = document.getElementById("ck-email").value.trim().toLowerCase();
+      if (!/@rtu\.edu\.ph$/.test(email)) return toast("Type the checker's @rtu.edu.ph email.", true);
+      if (checkers.some(function (c) { return c.email === email; })) return toast("Already a checker.", true);
+      checkers.push({ email: email, subjects: [] });
+      saveCk("Checker added. They can check every subject; untick All subjects to choose.").then(function () { document.getElementById("ck-email").value = ""; });
+    };
     document.getElementById("s-save").onclick = function () {
       var b = this; busy(b, true);
       call("admin_saveSettings", { studentUrl: document.getElementById("s-url").value.trim(), siteTitle: document.getElementById("s-title").value.trim(),
@@ -1729,7 +1796,7 @@ window.MathJax = { tex: { inlineMath: [['\\(', '\\)'], ['$', '$']], displayMath:
     };
   }
 
-  function reload() { return call("admin_load").then(function (d) { A = d; }); }
+  function reload() { return call(CHECKER ? "check_load" : "admin_load").then(function (d) { A = d; }); }
 
   reload().then(render).catch(function (e) {
     view.innerHTML = '<section class="ch"><h2>Could not load</h2><p>' + esc(e.message) + "</p><p class=\"muted\">If this is the first time, run <b>setup</b> from the Apps Script editor.</p></section>";

@@ -207,9 +207,11 @@ const server = http.createServer((req, res) => {
     return;
   }
   const email = url.searchParams.get('as') || '';
-  const page = url.searchParams.get('page') === 'admin' ? 'Admin' : 'Student';
+  const which = url.searchParams.get('page');
+  const page = which === 'admin' || which === 'check' ? 'Admin' : 'Student';
   let boot;
-  if (page === 'Admin') boot = { email, url: 'https://script.google.com/a/macros/rtu.edu.ph/s/TEST/exec', sheetUrl: ss.getUrl(), pagesUrl: 'https://mrvitalez.github.io/Online-Exam/' };
+  if (which === 'check') boot = { email, role: 'checker', isAdmin: as(email, () => ctx.isAdmin_(email)), url: 'https://script.google.com/a/macros/rtu.edu.ph/s/TEST/exec', pagesUrl: 'https://mrvitalez.github.io/Online-Exam/' };
+  else if (page === 'Admin') boot = { email, url: 'https://script.google.com/a/macros/rtu.edu.ph/s/TEST/exec', sheetUrl: ss.getUrl(), pagesUrl: 'https://mrvitalez.github.io/Online-Exam/' };
   else {
     boot = { email, url: '', admin: as(email, () => ctx.isAdmin_(email)), logo: '' };
     try { boot.home = as(email, () => JSON.parse(JSON.stringify(ctx.api_home()))); } catch (e) { boot.error = e.message; }

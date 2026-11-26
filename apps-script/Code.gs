@@ -37,10 +37,10 @@ var CLASS_HEAD = ['Student No.', 'Name', 'Subject', 'Block and Section', 'Email'
 var ATT_HEAD = ['Attempt ID', 'Exam ID', 'Subject', 'Exam', 'Email', 'Student No.', 'Name', 'Block and Section', 'Status',
                 'Started', 'Deadline', 'Submitted', 'How Submitted', 'Score', 'Total', 'Final Score', 'Remarks',
                 'Times Left Page', 'Seconds Away', 'Answers (JSON)', 'Item Results (JSON)', 'Events (JSON)', 'Points Given (JSON)', 'Set',
-                'Photos (JSON)'];
+                'Photos (JSON)', 'Corrections (JSON)'];
 var AC = { ID: 1, EXAM: 2, SUBJECT: 3, TITLE: 4, EMAIL: 5, NO: 6, NAME: 7, SECTION: 8, STATUS: 9, STARTED: 10,
            DEADLINE: 11, SUBMITTED: 12, HOW: 13, SCORE: 14, TOTAL: 15, FINAL: 16, REMARKS: 17, LEFT: 18, AWAY: 19,
-           ANSWERS: 20, ITEMS: 21, EVENTS: 22, MANUAL: 23, SET: 24, PHOTOS: 25 };
+           ANSWERS: 20, ITEMS: 21, EVENTS: 22, MANUAL: 23, SET: 24, PHOTOS: 25, CHANGES: 26 };
 var MAX_PHOTOS = 3;           // photos per question
 var PHOTO_MAX = 4000000;      // characters of one uploaded photo (about 3 MB); the student page shrinks photos first
 // Question types: multiple choice, problem solving (final answer + solution), identification (short answer), essay
@@ -49,7 +49,8 @@ var DEFAULT_SETTINGS = [
   ['studentUrl', '', 'Web app address ending in /exec (Deploy > Manage deployments). Used for all links.'],
   ['siteTitle', 'RTU Online Exams', 'Shown at the top of the student site'],
   ['instructor', 'Instr. Ryan M. Vitalez, LPT', 'Shown to students who are not on the class list'],
-  ['recordBooks', '', 'Record books imported into the Class List (set automatically)']
+  ['recordBooks', '', 'Record books imported into the Class List (set automatically)'],
+  ['checkers', '', 'Checkers and the subjects they may check (set in the admin site, Settings)']
 ];
 var SHOW_SOLUTIONS = ['After closing', 'After submitting', 'Never'];
 var STATUS_LIVE = 'In progress', STATUS_DONE = 'Submitted', STATUS_RESET = 'Reset (retake allowed)';
@@ -78,6 +79,13 @@ function doGet(e) {
   if (p.page === 'admin') {
     if (!isAdmin_(email)) return message_('Instructors only', 'This page is only for the instructor.');
     return app_('Admin', 'Exam Admin', { email: email, url: appUrl_(), sheetUrl: ss_().getUrl(), pagesUrl: CONFIG.PAGES_URL });
+  }
+  if (p.page === 'check') {
+    if (!isAdmin_(email) && !checkerSubjects_(email)) {
+      return message_('Checkers only', 'This page is for the instructor and the checkers they added. You are signed in as <b>' + esc_(email) + '</b>.');
+    }
+    return app_('Admin', 'Exam Checker', { email: email, role: 'checker', isAdmin: isAdmin_(email), url: appUrl_(), pagesUrl: CONFIG.PAGES_URL,
+                                            sheetUrl: isAdmin_(email) ? ss_().getUrl() : '' });
   }
   var boot = { email: email, url: appUrl_(), admin: isAdmin_(email), logo: CONFIG.LOGO };
   try { boot.home = api_home(); } catch (err) { boot.error = err.message; }
@@ -755,9 +763,9 @@ function api_removePhoto(examId, qid, fileId) {
 
 /** The photos of an attempt, as pictures the admin site can show: {question id: [{id, data, url}]}. */
 function admin_photos(attemptId) {
-  requireAdmin_();
   var row = findAttemptRow_(attemptId);
   if (!row) throw new Error('Attempt not found.');
+  requireChecker_(sheet_(TABS.ATTEMPTS).getRange(row, AC.SUBJECT).getValue());
   var live = getLive_(attemptId);
   var photos = live && live.photos ? live.photos : parseJson_(sheet_(TABS.ATTEMPTS).getRange(row, AC.PHOTOS).getValue(), {});
   var out = {};
@@ -1014,9 +1022,9 @@ function admin_duplicateExam(id) {
 
 /** Every enrolled student for the exam (with or without an attempt), plus attempts of students not on the list. */
 function admin_results(examId) {
-  requireAdmin_();
   var exam = examFull_(examId);
   if (!exam) throw new Error('Exam not found.');
+  requireChecker_(exam.subject);
   var sh = sheet_(TABS.ATTEMPTS);
   var last = sh.getLastRow();
   var byEmail = {};
@@ -1074,19 +1082,25 @@ function attemptView_(r, exam) {
     left: live ? live.departures : Number(r[AC.LEFT - 1]) || 0,
     away: live ? Math.round((live.awayMs + (live.awaySince ? Date.now() - live.awaySince : 0)) / 1000) : Number(r[AC.AWAY - 1]) || 0,
     awayNow: !!(live && live.awaySince), answers: answers, items: g.items, pending: g.pending, manual: manual,
-    events: live ? live.events : parseJson_(r[AC.EVENTS - 1], []), set: set,
+    events: live ? live.events : parseJson_(r[AC.EVENTS - 1], []), set: set, changes: parseJson_(r[AC.CHANGES - 1], []),
     photoCount: (function (ph) { return Object.keys(ph).reduce(function (t, k) { return t + ph[k].length; }, 0); })(
       live && live.photos ? live.photos : parseJson_(r[AC.PHOTOS - 1], {}))
   };
 }
 
 function admin_saveResult(attemptId, finalScore, remarks) {
-  requireAdmin_();
   var row = findAttemptRow_(attemptId);
   if (!row) throw new Error('Attempt not found.');
+  var sh = sheet_(TABS.ATTEMPTS);
+  var who = requireChecker_(sh.getRange(row, AC.SUBJECT).getValue());
+  var old = sh.getRange(row, AC.FINAL, 1, 2).getValues()[0];
   var f = String(finalScore == null ? '' : finalScore).trim();
+  if (!who.admin) f = String(old[0]);   // checkers write remarks; the final score is the instructor's
   if (f !== '' && !isFinite(Number(f))) throw new Error('The final score must be a number (or blank).');
-  sheet_(TABS.ATTEMPTS).getRange(row, AC.FINAL, 1, 2).setValues([[f === '' ? '' : Number(f), clean_(remarks, 500)]]);
+  var rm = clean_(remarks, 500);
+  sh.getRange(row, AC.FINAL, 1, 2).setValues([[f === '' ? '' : Number(f), rm]]);
+  if (String(old[0]) !== f) logChange_(row, 'final score ' + (f === '' ? 'cleared' : f) + (String(old[0]) !== '' ? ' (was ' + old[0] + ')' : ''));
+  if (String(old[1]) !== rm) logChange_(row, 'remarks: ' + (rm || '(cleared)'));
   return { ok: true };
 }
 
@@ -1095,13 +1109,14 @@ function admin_saveResult(attemptId, finalScore, remarks) {
  * scores: {question id: points or "" to go back to the automatic score}.
  */
 function admin_saveItemScores(attemptId, scores) {
-  requireAdmin_();
   var sh = sheet_(TABS.ATTEMPTS);
   var row = findAttemptRow_(attemptId);
   if (!row) throw new Error('Attempt not found.');
   var r = sh.getRange(row, 1, 1, ATT_HEAD.length).getValues()[0];
   var full = examFull_(r[AC.EXAM - 1]);
   if (!full) throw new Error('This exam no longer exists.');
+  requireChecker_(full.subject);
+  var before = parseJson_(r[AC.MANUAL - 1], {});
   var exam = examForSet_(full, r[AC.SET - 1]);
   var manual = parseJson_(r[AC.MANUAL - 1], {});
   exam.questions.forEach(function (q, i) {
@@ -1115,6 +1130,12 @@ function admin_saveItemScores(attemptId, scores) {
   var g = grade_(exam, parseJson_(r[AC.ANSWERS - 1], {}), manual);
   if (!sh.getRange(1, AC.MANUAL).getValue()) sh.getRange(1, AC.MANUAL).setValue(ATT_HEAD[AC.MANUAL - 1]);
   sh.getRange(row, AC.MANUAL).setValue(JSON.stringify(manual));
+  exam.questions.forEach(function (q, i) {   // who changed which points, for the instructor to review
+    if (String(before[q.id] == null ? '' : before[q.id]) === String(manual[q.id] == null ? '' : manual[q.id])) return;
+    logChange_(row, 'Q' + (i + 1) + ': ' + (manual[q.id] == null ? 'back to the automatic score' : manual[q.id] + ' / ' + q.points + ' points') +
+      (before[q.id] != null ? ' (was ' + before[q.id] + ')' : ''));
+  });
+  r[AC.CHANGES - 1] = sh.getRange(row, AC.CHANGES).getValue();
   if (r[AC.STATUS - 1] === STATUS_DONE) {
     sh.getRange(row, AC.SCORE, 1, 2).setValues([[g.score, g.total]]);
     sh.getRange(row, AC.ITEMS).setValue(itemsJson_(g));
@@ -1575,6 +1596,69 @@ function requireAdmin_() {
   var email = currentEmail_();
   if (!isAdmin_(email)) throw new Error('Instructors only.');
   return email;
+}
+
+// ----- Checkers: may open Results for their subjects, give points per question and write remarks -----
+
+/** [{email, subjects: [...]}] from the Settings tab; an empty subjects list means every subject. */
+function checkers_() {
+  return parseJson_(String(settings_().checkers || ''), []).filter(function (c) { return c && c.email; });
+}
+
+/** The subjects a checker may check: [] for all, or null if the person is not a checker. */
+function checkerSubjects_(email) {
+  email = String(email || '').toLowerCase();
+  var c = checkers_().filter(function (x) { return String(x.email).toLowerCase() === email; })[0];
+  return c ? (c.subjects || []) : null;
+}
+
+/** The instructor, or a checker allowed to check this subject. Returns {email, admin}. */
+function requireChecker_(subject) {
+  var email = currentEmail_();
+  if (isAdmin_(email)) return { email: email, admin: true };
+  var subs = checkerSubjects_(email);
+  if (!subs) throw new Error('Only the instructor and their checkers can do this.');
+  if (subject !== undefined && subs.length && !subs.some(function (x) { return subjKey_(x) === subjKey_(subject); })) {
+    throw new Error('You are not a checker for ' + subject + '.');
+  }
+  return { email: email, admin: false };
+}
+
+/** The checker page: the exams the person may check. */
+function check_load() {
+  var who = requireChecker_();
+  var subs = who.admin ? [] : checkerSubjects_(who.email);
+  var now = Date.now();
+  var list = exams_().filter(function (x) {
+    return (who.admin || x.status === 'Published') && (!subs.length || subs.some(function (s) { return subjKey_(s) === subjKey_(x.subject); }));
+  }).map(function (x) { return Object.assign({}, x, { state: examState_(x, now), count: questions_(x.id).length, counts: { live: 0, done: 0 } }); });
+  return { email: who.email, admin: who.admin, role: 'checker', exams: list, subjects: {}, subjectsAllowed: subs, now: now, settings: {} };
+}
+
+/** Saves who may check: [{email, subjects}] (instructor only). */
+function admin_saveCheckers(list) {
+  requireAdmin_();
+  var seen = {};
+  var clean = (list || []).map(function (c) {
+    var email = String((c && c.email) || '').trim().toLowerCase();
+    if (!isRtu_(email)) throw new Error('A checker must have an @' + CONFIG.DOMAIN + ' account: ' + (email || '(blank)'));
+    if (isAdmin_(email)) throw new Error(email + ' is already an instructor (full access).');
+    if (seen[email]) return null;
+    seen[email] = 1;
+    return { email: email, subjects: (c.subjects || []).map(function (x) { return clean_(x, 40); }).filter(String) };
+  }).filter(Boolean);
+  writeSettings_({ checkers: JSON.stringify(clean) });
+  return admin_load();
+}
+
+/** Adds a line to an attempt's list of corrections: who changed what, and when. */
+function logChange_(row, text) {
+  var sh = sheet_(TABS.ATTEMPTS);
+  if (!sh.getRange(1, AC.CHANGES).getValue()) sh.getRange(1, AC.CHANGES).setValue(ATT_HEAD[AC.CHANGES - 1]);
+  var list = parseJson_(sh.getRange(row, AC.CHANGES).getValue(), []);
+  list.push([Date.now(), currentEmail_(), String(text).slice(0, 200)]);
+  if (list.length > 200) list = list.slice(-200);
+  sh.getRange(row, AC.CHANGES).setValue(JSON.stringify(list));
 }
 
 /** The RTU email of a student number, e.g. 2026-101878 -> 2026-101878@rtu.edu.ph. */

@@ -62,6 +62,16 @@ At the top v = 0, so $h = \frac{v_0^2}{2g} = \frac{20^2}{2(9.8)} = 20.4$ m.
   (multiple choice) or type the **accepted answers**, answer, tolerance and solution, and set its **points**. All of
   this can also be changed later in the question list.
 
+### Checkers (for example a student assistant)
+- In **Settings > Checkers**, add the person's @rtu.edu.ph email and choose the subjects they may check (or All subjects).
+  Send them the **checker page** link shown there: the web app link followed by `?page=check`.
+- On the checker page they see only **Results** for published exams of those subjects: students' answers, solutions,
+  photos and activity logs. They can give points per question and write remarks.
+- They cannot edit exams or the class list, change settings, set the final score, allow retakes, re-grade or change a
+  student's set; the server refuses these even if tried another way. They do see the answer keys of the exams they check.
+- Every change of points, remarks or final score is listed under **Corrections** in the student's Results, with who made
+  it and when. You can open the checker page yourself to see what they see; your admin site keeps full access.
+
 ### Set A and Set B
 - In the exam settings, tick **Two sets (Set A and Set B)**. Each question then has a **Set** choice: Both sets, Set A
   or Set B. Pasted questions under a `Set A` / `Set B` heading are marked automatically.
